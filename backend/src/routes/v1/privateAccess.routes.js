@@ -25,7 +25,7 @@ export function createPrivateAccessRoutes(service = createPrivateAccessService()
     message: "Too many private access requests",
     keyGenerator: (req) => req.user?.id || req.ip || "unknown",
   });
-  router.use(auth, onboardingRequired);
+  router.use("/private-access", auth, onboardingRequired);
 
   router.post("/private-access/requests", privateRequestRateLimit, async (req, res, next) => {
     try {

@@ -20,7 +20,7 @@ const eventIdParamSchema = z.object({
 
 export function createEventsRoutes(service = createEventsService()) {
   const router = Router();
-  router.use(auth, onboardingRequired);
+  router.use("/events", auth, onboardingRequired);
 
   router.get("/events/discovery", async (req, res, next) => {
     try {

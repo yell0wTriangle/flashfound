@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   Lock,
@@ -12,118 +13,159 @@ import {
   LibrarySquare,
   ShieldCheck,
 } from "lucide-react";
+import { apiRequest } from "../lib/api.js";
+import { supabase } from "../lib/supabase.js";
+import { DEFAULT_AVATAR_PLACEHOLDER } from "../lib/avatarPlaceholder.js";
+
+function fallbackImage(index) {
+  return `https://images.unsplash.com/photo-1515169067865-5387ec356754?auto=format&fit=crop&q=80&w=${760 + (index % 4) * 60}`;
+}
 
 const App = () => {
+  const { eventId } = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+
   const [searchQuery, setSearchQuery] = useState("");
   const [requestedAccess, setRequestedAccess] = useState([]);
   const [isMobileFilterOpen, setIsMobileFilterOpen] = useState(false);
-
-  // Attendees you already have access to (Simulated approved list)
-  const [approvedAccessIds] = useState(["u2", "u3"]); // Sarah and David gave access
-
-  // Selection State for Attendees
-  const [checkedAttendeeIds, setCheckedAttendeeIds] = useState(["me"]);
-
-  // Photo Selection State (for adding to gallery)
+  const [checkedAttendeeIds, setCheckedAttendeeIds] = useState(["all"]);
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedPhotoIds, setSelectedPhotoIds] = useState([]);
+  const [isAdding, setIsAdding] = useState(false);
+  const [addedCount, setAddedCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [eventData, setEventData] = useState(null);
+  const [attendees, setAttendees] = useState([]);
+  const [allMatchedPhotos, setAllMatchedPhotos] = useState([]);
+  const [viewerId, setViewerId] = useState("");
 
-  // Event Context
-  const eventDetails = {
-    name: "TechNova Summit '26",
-    date: "October 12, 2026",
-    location: "San Francisco, CA",
-    type: "Private Event",
-    totalPhotos: 842,
-  };
+  const selectedPersonIds = useMemo(() => {
+    if (checkedAttendeeIds.includes("all")) return [];
+    return checkedAttendeeIds;
+  }, [checkedAttendeeIds]);
 
-  const attendees = [
-    {
-      id: "me",
-      name: "Me",
-      avatar: "https://picsum.photos/seed/selfie3/200/200",
-      isMe: true,
-    },
-    {
-      id: "u2",
-      name: "Sarah Jenkins",
-      avatar:
-        "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=150",
-      isMe: false,
-    },
-    {
-      id: "u3",
-      name: "David Chen",
-      avatar:
-        "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=150",
-      isMe: false,
-    },
-    {
-      id: "u4",
-      name: "Emily Rodriguez",
-      avatar:
-        "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=crop&q=80&w=150",
-      isMe: false,
-    },
-    {
-      id: "u5",
-      name: "Michael Chang",
-      avatar:
-        "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&q=80&w=150",
-      isMe: false,
-    },
-  ];
+  useEffect(() => {
+    let cancelled = false;
 
-  // Dummy logic: Me is in all photos, Sarah/David appear in some
-  const allMatchedPhotos = useMemo(() => {
-    return Array.from({ length: 18 }).map((_, i) => {
-      const heights = [300, 400, 500, 250, 450];
-      const subjects = ["me"];
-      if (i % 3 === 0) subjects.push("u2"); // Sarah
-      if (i % 4 === 0) subjects.push("u3"); // David
-      if (i % 5 === 0) subjects.push("u4"); // Emily (Locked)
+    const load = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session?.access_token) {
+          if (cancelled) return;
+          setEventData(null);
+          setAttendees([]);
+          setAllMatchedPhotos([]);
+          setViewerId("");
+          return;
+        }
 
-      return {
-        id: i,
-        subjects,
-        url: `https://picsum.photos/seed/technova${i + 10}/400/${heights[i % heights.length]}`,
-      };
-    });
-  }, []);
+        setViewerId(session.user.id);
 
-  // Filter Photos based on checked attendees
-  const displayPhotos = useMemo(() => {
-    return allMatchedPhotos.filter((photo) => {
-      if (checkedAttendeeIds.includes("all")) {
-        // "Everyone" filter: Show photos of Me OR anyone I have approved access to
-        const allowedIds = ["me", ...approvedAccessIds];
-        return photo.subjects.some((id) => allowedIds.includes(id));
+        const params = new URLSearchParams();
+        if (selectedPersonIds.length) {
+          params.set("person_ids", selectedPersonIds.join(","));
+        }
+        const suffix = params.toString() ? `?${params.toString()}` : "";
+        const data = await apiRequest(`/events/${eventId}/results${suffix}`, {
+          token: session.access_token,
+        });
+
+        if (cancelled) return;
+        setEventData(data?.event || null);
+        setAttendees(data?.people || []);
+        setAllMatchedPhotos(
+          (data?.photos || []).map((photo, index) => ({
+            id: photo.id,
+            subjects: photo.people || [],
+            url: photo.image_url || fallbackImage(index),
+          })),
+        );
+      } catch (requestError) {
+        if (cancelled) return;
+        setError(requestError instanceof Error ? requestError.message : String(requestError));
+        setEventData(null);
+        setAttendees([]);
+        setAllMatchedPhotos([]);
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
-      return photo.subjects.some((id) => checkedAttendeeIds.includes(id));
-    });
-  }, [checkedAttendeeIds, approvedAccessIds, allMatchedPhotos]);
+    };
 
-  const filteredAttendees = attendees.filter((user) =>
-    user.name.toLowerCase().includes(searchQuery.toLowerCase()),
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [eventId, selectedPersonIds]);
+
+  const approvedAccessIds = useMemo(
+    () => attendees.filter((person) => person.accessible).map((person) => person.id),
+    [attendees],
   );
 
+  const displayPhotos = useMemo(() => {
+    if (checkedAttendeeIds.includes("all")) {
+      return allMatchedPhotos;
+    }
+    return allMatchedPhotos.filter((photo) =>
+      photo.subjects.some((id) => checkedAttendeeIds.includes(id)),
+    );
+  }, [allMatchedPhotos, checkedAttendeeIds]);
+
+  const filteredAttendees = useMemo(() => {
+    return attendees.filter((user) =>
+      (user.name || "").toLowerCase().includes(searchQuery.toLowerCase()),
+    );
+  }, [attendees, searchQuery]);
+
   const toggleAttendeeCheck = (id) => {
-    setCheckedAttendeeIds((prev) => {
+    setSelectedPhotoIds([]);
+    setAddedCount(0);
+    setCheckedAttendeeIds((previous) => {
       if (id === "all") return ["all"];
-      const newIds = prev.includes(id)
-        ? prev.filter((aId) => aId !== id)
-        : [...prev.filter((aId) => aId !== "all"), id];
-      return newIds.length === 0 ? ["me"] : newIds;
+      const next = previous.includes(id)
+        ? previous.filter((attendeeId) => attendeeId !== id && attendeeId !== "all")
+        : [...previous.filter((attendeeId) => attendeeId !== "all"), id];
+      return next.length ? next : [viewerId].filter(Boolean);
     });
   };
 
-  const handleRequestAccess = (id) => {
-    setRequestedAccess((prev) => [...prev, id]);
+  const handleRequestAccess = async (targetUserId) => {
+    if (requestedAccess.includes(targetUserId)) return;
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error("Session expired. Please login again.");
+      }
+
+      await apiRequest("/private-access/requests", {
+        method: "POST",
+        token: session.access_token,
+        body: {
+          event_id: eventId,
+          target_user_id: targetUserId,
+        },
+      });
+
+      setRequestedAccess((previous) => [...previous, targetUserId]);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+    }
   };
 
   const toggleSelectMode = () => {
-    setIsSelectMode(!isSelectMode);
+    setIsSelectMode((previous) => !previous);
     setSelectedPhotoIds([]);
+    setAddedCount(0);
   };
 
   const togglePhotoSelection = (id) => {
@@ -142,31 +184,56 @@ const App = () => {
     }
   };
 
-  const handleAddToGallery = () => {
-    console.log(`Added ${selectedPhotoIds.length} photos to My Photos!`);
-    toggleSelectMode();
+  const handleAddToGallery = async () => {
+    if (!selectedPhotoIds.length || isAdding) return;
+    setIsAdding(true);
+    setError("");
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error("Session expired. Please login again.");
+      }
+
+      const result = await apiRequest("/my-photos", {
+        method: "POST",
+        token: session.access_token,
+        body: { photo_ids: selectedPhotoIds },
+      });
+      setAddedCount(result?.added_count || 0);
+      setSelectedPhotoIds([]);
+      setIsSelectMode(false);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+    } finally {
+      setIsAdding(false);
+    }
   };
 
   const getViewingText = () => {
     if (checkedAttendeeIds.includes("all")) return "Everyone (Authorized)";
     if (checkedAttendeeIds.length === 0) return "No one selected";
-    const selectedNames = checkedAttendeeIds.map(
-      (id) => attendees.find((a) => a.id === id)?.name || "Me",
-    );
-    if (checkedAttendeeIds.length <= 2) return selectedNames.join(" & ");
-    return `${selectedNames[0]} & ${checkedAttendeeIds.length - 1} others`;
+    const selectedNames = checkedAttendeeIds
+      .map((id) => attendees.find((a) => a.id === id)?.name || "Me")
+      .filter(Boolean);
+    if (selectedNames.length <= 2) return selectedNames.join(" & ");
+    return `${selectedNames[0]} & ${selectedNames.length - 1} others`;
   };
 
   return (
     <div className="h-screen w-full bg-gray-50 flex flex-col font-sans text-gray-900 overflow-hidden">
-      {/* Header */}
       <header
         className={`flex items-center justify-between px-4 sm:px-6 py-4 border-b shrink-0 z-20 shadow-sm transition-colors ${isSelectMode ? "bg-blue-50 border-blue-200" : "bg-white border-gray-200"}`}
       >
         <div className="flex items-center gap-4">
           <button
             className={`p-2 -ml-2 rounded-full transition-colors flex items-center justify-center ${isSelectMode ? "text-blue-700 hover:bg-blue-100" : "text-gray-500 hover:text-gray-900 hover:bg-gray-100"}`}
-            onClick={isSelectMode ? toggleSelectMode : undefined}
+            onClick={
+              isSelectMode
+                ? toggleSelectMode
+                : () => navigate(location.state?.from || "/events", { replace: true })
+            }
           >
             {isSelectMode ? <X size={20} /> : <ArrowLeft size={20} />}
           </button>
@@ -175,14 +242,14 @@ const App = () => {
               <>
                 <div className="flex items-center gap-2 mb-0.5">
                   <h1 className="text-lg sm:text-xl font-bold text-gray-900 tracking-tight leading-none">
-                    {eventDetails.name}
+                    {eventData?.name || "Private Event"}
                   </h1>
                   <span className="hidden sm:flex items-center gap-1 px-2 py-0.5 bg-gray-100 text-gray-600 rounded-md text-[10px] font-bold uppercase tracking-wider">
                     <Lock size={10} /> Private
                   </span>
                 </div>
                 <p className="text-xs sm:text-sm text-gray-500">
-                  {eventDetails.date} • {eventDetails.location}
+                  {eventData?.date || "Date unavailable"} • {eventData?.location || "Location unavailable"}
                 </p>
               </>
             ) : (
@@ -195,15 +262,11 @@ const App = () => {
         <div className="flex items-center gap-3">
           <button
             onClick={isSelectMode ? handleAddToGallery : toggleSelectMode}
-            disabled={isSelectMode && selectedPhotoIds.length === 0}
+            disabled={isSelectMode && (selectedPhotoIds.length === 0 || isAdding)}
             className="flex items-center gap-2 px-4 py-2 bg-[#2563eb] text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors shadow-sm disabled:opacity-50"
           >
-            {isSelectMode ? (
-              <LibrarySquare size={16} />
-            ) : (
-              <CheckSquare size={16} />
-            )}
-            {isSelectMode ? "Add to My Photos" : "Select Photos"}
+            {isSelectMode ? <LibrarySquare size={16} /> : <CheckSquare size={16} />}
+            {isSelectMode ? (isAdding ? "Adding..." : "Add to My Photos") : "Select Photos"}
           </button>
           {!isSelectMode && (
             <button
@@ -217,7 +280,6 @@ const App = () => {
       </header>
 
       <div className="flex flex-col md:flex-row flex-1 overflow-hidden relative">
-        {/* Sidebar */}
         <aside
           className={`${isMobileFilterOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} absolute md:relative z-10 md:z-0 w-full md:w-80 h-full flex-shrink-0 bg-white border-r border-gray-200 flex flex-col transition-transform duration-300 ease-in-out`}
         >
@@ -240,7 +302,7 @@ const App = () => {
                 type="text"
                 placeholder="Search attendees..."
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(event) => setSearchQuery(event.target.value)}
                 className="w-full pl-9 pr-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:bg-white focus:border-blue-500 outline-none transition-all"
                 disabled={isSelectMode}
               />
@@ -250,7 +312,6 @@ const App = () => {
           <div
             className={`flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar ${isSelectMode ? "opacity-50 pointer-events-none" : ""}`}
           >
-            {/* Everyone Toggle (Authorized only) */}
             {!searchQuery && (
               <div
                 onClick={() => toggleAttendeeCheck("all")}
@@ -287,10 +348,10 @@ const App = () => {
 
             {filteredAttendees.map((user) => {
               const isChecked = checkedAttendeeIds.includes(user.id);
-              const isApproved = approvedAccessIds.includes(user.id);
+              const isApproved = user.accessible;
               const hasRequested = requestedAccess.includes(user.id);
 
-              if (user.isMe || isApproved) {
+              if (user.id === viewerId || isApproved) {
                 return (
                   <div
                     key={user.id}
@@ -302,18 +363,18 @@ const App = () => {
                     }`}
                   >
                     <div className="flex items-center gap-3">
-                      <img
-                        src={user.avatar}
-                        className="w-10 h-10 rounded-full object-cover border-2 border-white shadow-sm"
-                        alt={user.name}
-                      />
+                    <img
+                      src={user.avatar_url || DEFAULT_AVATAR_PLACEHOLDER}
+                      className="w-10 h-10 rounded-full object-cover border-2 border-white shadow-sm"
+                      alt={user.name}
+                    />
                       <div className="flex flex-col">
                         <span
                           className={`text-sm ${isChecked ? "font-bold text-gray-900" : "font-medium text-gray-600"}`}
                         >
-                          {user.isMe ? "Me" : user.name}
+                          {user.id === viewerId ? "Me" : user.name}
                         </span>
-                        {!user.isMe && (
+                        {user.id !== viewerId && (
                           <span className="text-[10px] text-green-600 font-bold flex items-center gap-1">
                             <ShieldCheck size={10} /> Access Granted
                           </span>
@@ -336,7 +397,7 @@ const App = () => {
                 >
                   <div className="flex items-center gap-3 overflow-hidden">
                     <img
-                      src={user.avatar}
+                      src={user.avatar_url || DEFAULT_AVATAR_PLACEHOLDER}
                       className="w-10 h-10 rounded-full object-cover grayscale opacity-50"
                       alt={user.name}
                     />
@@ -371,7 +432,6 @@ const App = () => {
           </div>
         </aside>
 
-        {/* Gallery Area */}
         <main className="flex-1 flex flex-col bg-gray-50 overflow-hidden relative">
           <div className="px-4 sm:px-6 py-5 flex items-center justify-between shrink-0 bg-gray-50/80 backdrop-blur-sm z-10 sticky top-0">
             <div>
@@ -406,39 +466,59 @@ const App = () => {
           </div>
 
           <div className="flex-1 overflow-y-auto px-4 sm:px-6 pb-24 sm:pb-6 custom-scrollbar">
-            <div className="columns-2 sm:columns-3 xl:columns-4 gap-4 space-y-4">
-              {displayPhotos.map((photo) => {
-                const isSelected = selectedPhotoIds.includes(photo.id);
-                return (
-                  <div
-                    key={photo.id}
-                    onClick={() =>
-                      isSelectMode && togglePhotoSelection(photo.id)
-                    }
-                    className={`break-inside-avoid relative group rounded-xl overflow-hidden bg-white shadow-sm transition-all border-2 ${isSelected ? "border-[#2563eb]" : "border-transparent"} ${isSelectMode ? "cursor-pointer" : ""}`}
-                  >
-                    <img
-                      src={photo.url}
-                      className={`w-full h-auto object-cover transition-opacity ${isSelected ? "opacity-80" : "opacity-100"}`}
-                      loading="lazy"
-                      alt="Moment"
-                    />
-                    {isSelectMode && (
-                      <div className="absolute top-3 left-3 z-10">
-                        <div
-                          className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${isSelected ? "bg-[#2563eb] border-[#2563eb] text-white" : "bg-black/20 border-white/80"}`}
-                        >
-                          {isSelected && <Check size={14} strokeWidth={3} />}
+            {error ? (
+              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {error}
+              </div>
+            ) : null}
+
+            {loading ? (
+              <div className="h-full flex items-center justify-center text-sm text-gray-500">
+                Loading gallery...
+              </div>
+            ) : (
+              <div className="columns-2 sm:columns-3 xl:columns-4 gap-4 space-y-4">
+                {displayPhotos.map((photo) => {
+                  const isSelected = selectedPhotoIds.includes(photo.id);
+                  return (
+                    <div
+                      key={photo.id}
+                      onClick={() => isSelectMode && togglePhotoSelection(photo.id)}
+                      className={`break-inside-avoid relative group rounded-xl overflow-hidden bg-white shadow-sm transition-all border-2 ${isSelected ? "border-[#2563eb]" : "border-transparent"} ${isSelectMode ? "cursor-pointer" : ""}`}
+                    >
+                      <img
+                        src={photo.url}
+                        className="w-full h-auto object-cover"
+                        alt="Matched memory"
+                      />
+
+                      {isSelectMode && (
+                        <div className="absolute top-3 left-3">
+                          <div
+                            className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                              isSelected
+                                ? "bg-[#2563eb] border-[#2563eb] text-white"
+                                : "bg-white/80 border-white text-transparent"
+                            }`}
+                          >
+                            {isSelected && <Check size={12} strokeWidth={3} />}
+                          </div>
                         </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </main>
       </div>
+
+      {addedCount > 0 ? (
+        <div className="fixed bottom-5 right-5 rounded-xl bg-green-600 text-white px-4 py-3 text-sm shadow-lg z-50">
+          Added {addedCount} photo{addedCount > 1 ? "s" : ""} to My Photos
+        </div>
+      ) : null}
     </div>
   );
 };

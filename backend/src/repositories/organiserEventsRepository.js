@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "../clients/supabaseAdmin.js";
+import { env } from "../config/env.js";
 
 export function createOrganiserEventsRepository(client = supabaseAdmin) {
   return {
@@ -66,6 +67,16 @@ export function createOrganiserEventsRepository(client = supabaseAdmin) {
       return data;
     },
 
+    async getAttendeesByEventId(eventId) {
+      const { data, error } = await client
+        .from("event_attendees")
+        .select("*")
+        .eq("event_id", eventId)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data ?? [];
+    },
+
     async getProfilesByEmails(emails) {
       if (!emails.length) return [];
       const { data, error } = await client
@@ -103,6 +114,13 @@ export function createOrganiserEventsRepository(client = supabaseAdmin) {
       if (error) throw error;
       return data ?? [];
     },
+
+    async createSignedPhotoUrl(storagePath, ttlSeconds = 900) {
+      const { data, error } = await client.storage
+        .from(env.EVENT_PHOTOS_BUCKET)
+        .createSignedUrl(storagePath, ttlSeconds);
+      if (error) throw error;
+      return data?.signedUrl || null;
+    },
   };
 }
-

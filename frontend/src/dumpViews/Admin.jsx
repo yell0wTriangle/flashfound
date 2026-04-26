@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   ShieldAlert,
   Check,
@@ -14,90 +14,113 @@ import {
   ArrowRight,
   ShieldCheck,
 } from "lucide-react";
+import { apiRequest } from "../lib/api.js";
+
+function formatDate(input) {
+  if (!input) return "-";
+  try {
+    return new Date(input).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  } catch {
+    return input;
+  }
+}
 
 const App = () => {
-  // Access Control State
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [adminToken, setAdminToken] = useState("");
   const [accessKey, setAccessKey] = useState("");
-  const [error, setError] = useState(false);
-
-  // Mock Data for Pending Requests
-  const [pendingRequests, setPendingRequests] = useState([
-    {
-      id: "req_1",
-      name: "John Doe",
-      email: "john@weddingpix.com",
-      date: "Oct 20, 2026",
-    },
-    {
-      id: "req_2",
-      name: "KIIT Photography Society",
-      email: "ksac@kiit.ac.in",
-      date: "Oct 21, 2026",
-    },
-    {
-      id: "req_3",
-      name: "Sarah Miller",
-      email: "sarah.m@freelance.io",
-      date: "Oct 22, 2026",
-    },
-  ]);
-
-  // Mock Data for Active Organizers
-  const [activeOrganizers, setActiveOrganizers] = useState([
-    {
-      id: "org_1",
-      name: "TechNova Events",
-      email: "admin@technova.com",
-      joinedDate: "Jan 15, 2026",
-    },
-    {
-      id: "org_2",
-      name: "City Marathon Org",
-      email: "access@nyrr.org",
-      joinedDate: "Feb 10, 2026",
-    },
-  ]);
-
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [allRequests, setAllRequests] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Handlers
-  const handleLogin = (e) => {
-    e.preventDefault();
-    // In a real app, this would check against an environment variable or a secure hash
-    if (accessKey === "flashfound_admin_2026") {
-      setIsAuthenticated(true);
-      setError(false);
-    } else {
-      setError(true);
-      setAccessKey("");
+  const loadRequests = async (token, query = "") => {
+    const params = new URLSearchParams();
+    if (query.trim()) params.set("q", query.trim());
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    const data = await apiRequest(`/admin/organiser-requests${suffix}`, {
+      token,
+    });
+    setAllRequests(data?.requests || []);
+  };
+
+  const handleLogin = (event) => {
+    event.preventDefault();
+    const run = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const data = await apiRequest("/admin/auth", {
+          method: "POST",
+          body: { access_key: accessKey },
+        });
+        const token = data?.token;
+        if (!token) {
+          throw new Error("Admin token missing in response.");
+        }
+        await loadRequests(token);
+        setAdminToken(token);
+        setIsAuthenticated(true);
+      } catch (requestError) {
+        setError(requestError instanceof Error ? requestError.message : String(requestError));
+        setAccessKey("");
+      } finally {
+        setLoading(false);
+      }
+    };
+    run();
+  };
+
+  const handleSearch = (value) => {
+    setSearchQuery(value);
+    if (!adminToken) return;
+    const run = async () => {
+      try {
+        await loadRequests(adminToken, value);
+      } catch (requestError) {
+        setError(requestError instanceof Error ? requestError.message : String(requestError));
+      }
+    };
+    run();
+  };
+
+  const handleRequestReview = async (requestId, action) => {
+    if (!adminToken) return;
+    setLoading(true);
+    setError("");
+    try {
+      await apiRequest(`/admin/organiser-requests/${requestId}/${action}`, {
+        method: "POST",
+        token: adminToken,
+      });
+      await loadRequests(adminToken, searchQuery);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+    } finally {
+      setLoading(false);
     }
   };
 
-  const approveRequest = (request) => {
-    setPendingRequests(pendingRequests.filter((r) => r.id !== request.id));
-    setActiveOrganizers([
-      {
-        ...request,
-        joinedDate: new Date().toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-        }),
-      },
-      ...activeOrganizers,
-    ]);
-  };
+  const pendingRequests = useMemo(
+    () => allRequests.filter((request) => request.status === "pending"),
+    [allRequests],
+  );
 
-  const rejectRequest = (id) => {
-    setPendingRequests(pendingRequests.filter((r) => r.id !== id));
-  };
+  const activeOrganizers = useMemo(() => {
+    const approved = allRequests.filter((request) => request.status === "approved");
+    const uniqueByUser = new Map();
+    approved.forEach((request) => {
+      if (!uniqueByUser.has(request.user_id)) {
+        uniqueByUser.set(request.user_id, request);
+      }
+    });
+    return [...uniqueByUser.values()];
+  }, [allRequests]);
 
-  const removeOrganizer = (id) => {
-    setActiveOrganizers(activeOrganizers.filter((o) => o.id !== id));
-  };
-
-  // --- RENDER LOGIN GATE ---
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen w-full bg-gray-50 flex items-center justify-center p-6 font-sans">
@@ -123,25 +146,26 @@ const App = () => {
                 type="password"
                 placeholder="Access Key"
                 value={accessKey}
-                onChange={(e) => {
-                  setAccessKey(e.target.value);
-                  if (error) setError(false);
+                onChange={(event) => {
+                  setAccessKey(event.target.value);
+                  setError("");
                 }}
                 className={`w-full pl-11 pr-4 py-3.5 bg-gray-50 border ${error ? "border-red-500 ring-4 ring-red-500/10" : "border-gray-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"} rounded-xl text-sm outline-none transition-all`}
               />
             </div>
 
-            {error && (
+            {error ? (
               <p className="text-red-500 text-xs font-bold animate-in fade-in slide-in-from-top-1">
-                Invalid access key. Access logged.
+                {error}
               </p>
-            )}
+            ) : null}
 
             <button
               type="submit"
-              className="w-full flex items-center justify-center gap-2 py-3.5 bg-gray-900 text-white rounded-xl font-bold hover:bg-black active:scale-[0.98] transition-all shadow-lg"
+              disabled={loading}
+              className="w-full flex items-center justify-center gap-2 py-3.5 bg-gray-900 text-white rounded-xl font-bold hover:bg-black active:scale-[0.98] transition-all shadow-lg disabled:opacity-60"
             >
-              Verify Identity <ArrowRight size={18} />
+              {loading ? "Verifying..." : "Verify Identity"} <ArrowRight size={18} />
             </button>
           </form>
 
@@ -153,10 +177,8 @@ const App = () => {
     );
   }
 
-  // --- RENDER DASHBOARD ---
   return (
     <div className="min-h-screen w-full bg-gray-50 font-sans text-gray-900 overflow-y-auto custom-scrollbar pb-20">
-      {/* Header Area */}
       <div className="bg-white border-b border-gray-200 px-4 sm:px-8 py-8 shrink-0">
         <div className="max-w-5xl mx-auto flex flex-col sm:flex-row sm:items-end justify-between gap-6">
           <div className="flex items-center gap-4">
@@ -187,7 +209,7 @@ const App = () => {
               type="text"
               placeholder="Search users..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(event) => handleSearch(event.target.value)}
               className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500/20 outline-none transition-all"
             />
           </div>
@@ -195,7 +217,12 @@ const App = () => {
       </div>
 
       <main className="max-w-5xl mx-auto p-4 sm:p-8 space-y-10">
-        {/* SECTION: PENDING REQUESTS */}
+        {error ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {error}
+          </div>
+        ) : null}
+
         <section>
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-2">
@@ -218,9 +245,9 @@ const App = () => {
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {pendingRequests.map((req) => (
+              {pendingRequests.map((request) => (
                 <div
-                  key={req.id}
+                  key={request.id}
                   className="bg-white border border-gray-200 p-5 rounded-2xl shadow-sm hover:shadow-md transition-shadow relative"
                 >
                   <div className="flex justify-between items-start mb-4">
@@ -228,30 +255,32 @@ const App = () => {
                       <UserPlus size={20} />
                     </div>
                     <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider bg-gray-50 px-2 py-1 rounded">
-                      {req.date}
+                      {formatDate(request.requested_at)}
                     </span>
                   </div>
 
                   <div className="mb-6">
                     <h3 className="font-bold text-gray-900 truncate">
-                      {req.name}
+                      {request.user?.display_name || "Unknown"}
                     </h3>
                     <div className="flex items-center gap-1.5 text-sm text-gray-500 mt-1">
                       <Mail size={14} />
-                      <span className="truncate">{req.email}</span>
+                      <span className="truncate">{request.user?.email || "No email"}</span>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2 pt-4 border-t border-gray-100">
                     <button
-                      onClick={() => approveRequest(req)}
-                      className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-[#2563eb] text-white rounded-xl text-xs font-bold hover:bg-blue-700 active:scale-[0.98] transition-all shadow-sm"
+                      onClick={() => handleRequestReview(request.id, "approve")}
+                      disabled={loading}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-[#2563eb] text-white rounded-xl text-xs font-bold hover:bg-blue-700 active:scale-[0.98] transition-all shadow-sm disabled:opacity-50"
                     >
                       <Check size={14} strokeWidth={3} /> Approve
                     </button>
                     <button
-                      onClick={() => rejectRequest(req.id)}
-                      className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-gray-50 text-gray-600 rounded-xl text-xs font-bold hover:bg-red-50 hover:text-red-600 transition-colors"
+                      onClick={() => handleRequestReview(request.id, "deny")}
+                      disabled={loading}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-gray-50 text-gray-600 rounded-xl text-xs font-bold hover:bg-red-50 hover:text-red-600 transition-colors disabled:opacity-50"
                     >
                       <X size={14} strokeWidth={3} /> Reject
                     </button>
@@ -262,7 +291,6 @@ const App = () => {
           )}
         </section>
 
-        {/* SECTION: AUTHORIZED ORGANIZERS */}
         <section>
           <div className="flex items-center gap-2 mb-6">
             <Users size={20} className="text-emerald-600" />
@@ -288,9 +316,9 @@ const App = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {activeOrganizers.map((org) => (
+                {activeOrganizers.map((organizer) => (
                   <tr
-                    key={org.id}
+                    key={organizer.user_id}
                     className="hover:bg-gray-50/30 transition-colors group"
                   >
                     <td className="px-6 py-4">
@@ -300,10 +328,10 @@ const App = () => {
                         </div>
                         <div className="min-w-0">
                           <p className="font-bold text-gray-900 text-sm truncate">
-                            {org.name}
+                            {organizer.user?.display_name || "Unknown"}
                           </p>
                           <p className="text-xs text-gray-400 truncate">
-                            {org.email}
+                            {organizer.user?.email || "No email"}
                           </p>
                         </div>
                       </div>
@@ -311,14 +339,14 @@ const App = () => {
                     <td className="px-6 py-4 hidden sm:table-cell">
                       <div className="flex items-center gap-1.5 text-xs text-gray-500 font-medium">
                         <Calendar size={14} className="text-gray-300" />
-                        {org.joinedDate}
+                        {formatDate(organizer.reviewed_at || organizer.requested_at)}
                       </div>
                     </td>
                     <td className="px-6 py-4 text-right">
                       <button
-                        onClick={() => removeOrganizer(org.id)}
-                        className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
-                        title="Revoke Access"
+                        disabled
+                        className="p-2 text-gray-300 bg-gray-50 rounded-lg cursor-not-allowed"
+                        title="Revoke access will be added in a later phase"
                       >
                         <Trash2 size={18} />
                       </button>
@@ -331,11 +359,15 @@ const App = () => {
         </section>
       </main>
 
-      {/* Footer Info */}
       <footer className="max-w-5xl mx-auto px-4 sm:px-8 mt-12 pt-8 border-t border-gray-200 flex flex-col sm:flex-row items-center justify-between gap-4 text-gray-400 text-[11px] font-medium uppercase tracking-wider">
         <div className="flex items-center gap-4">
           <button
-            onClick={() => setIsAuthenticated(false)}
+            onClick={() => {
+              setIsAuthenticated(false);
+              setAdminToken("");
+              setAllRequests([]);
+              setSearchQuery("");
+            }}
             className="hover:text-red-500 transition-colors"
           >
             Logout Session

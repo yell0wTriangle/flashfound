@@ -58,5 +58,21 @@ export function createProfileRepository(client = supabaseAdmin) {
 
       return data ?? [];
     },
+
+    async linkAttendeeRowsToUserByEmail({ userId, email }) {
+      if (!email) return [];
+      const { data, error } = await client
+        .from("event_attendees")
+        .update({ user_id: userId })
+        .ilike("email", email)
+        .is("user_id", null)
+        .select("id,event_id,email,user_id");
+
+      if (error) {
+        throw error;
+      }
+
+      return data ?? [];
+    },
   };
 }

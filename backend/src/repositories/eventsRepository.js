@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "../clients/supabaseAdmin.js";
+import { env } from "../config/env.js";
 
 export function createEventsRepository(client = supabaseAdmin) {
   return {
@@ -57,7 +58,9 @@ export function createEventsRepository(client = supabaseAdmin) {
     async getPhotosByEventId(eventId) {
       const { data, error } = await client
         .from("event_photos")
-        .select("id,event_id,storage_path,image_url,uploaded_by_user_id,created_at")
+        .select(
+          "id,event_id,storage_path,image_url,uploaded_by_user_id,created_at,face_processing_status,face_processing_error,face_processed_at",
+        )
         .eq("event_id", eventId)
         .order("created_at", { ascending: false });
       if (error) throw error;
@@ -88,7 +91,9 @@ export function createEventsRepository(client = supabaseAdmin) {
       if (!photoIds.length) return [];
       const { data, error } = await client
         .from("event_photos")
-        .select("id,event_id,storage_path,image_url,uploaded_by_user_id,created_at")
+        .select(
+          "id,event_id,storage_path,image_url,uploaded_by_user_id,created_at,face_processing_status,face_processing_error,face_processed_at",
+        )
         .in("id", photoIds);
       if (error) throw error;
       return data ?? [];
@@ -110,6 +115,14 @@ export function createEventsRepository(client = supabaseAdmin) {
         .eq("requester_user_id", requesterUserId);
       if (error) throw error;
       return (data ?? []).map((row) => row.target_user_id);
+    },
+
+    async createSignedPhotoUrl(storagePath, ttlSeconds = 900) {
+      const { data, error } = await client.storage
+        .from(env.EVENT_PHOTOS_BUCKET)
+        .createSignedUrl(storagePath, ttlSeconds);
+      if (error) throw error;
+      return data?.signedUrl || null;
     },
   };
 }

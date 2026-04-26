@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect, useMemo } from "react";
-import { useParams } from "react-router-dom";
+import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   Camera,
   Menu,
@@ -28,6 +28,8 @@ import {
   Bell,
   AlertCircle,
 } from "lucide-react";
+import { apiRequest } from "../lib/api.js";
+import { supabase } from "../lib/supabase.js";
 
 // Inlined NavBar component
 const NavBar = ({ activePage }) => {
@@ -80,25 +82,34 @@ const NavBar = ({ activePage }) => {
 };
 
 const App = () => {
+  const navigate = useNavigate();
   const { eventId } = useParams();
   const isManageMode = Boolean(eventId);
+  const eventPhotosBucket = import.meta.env.VITE_SUPABASE_EVENT_PHOTOS_BUCKET || "event-photos";
+  const eventCoversBucket = import.meta.env.VITE_SUPABASE_EVENT_COVERS_BUCKET || eventPhotosBucket;
   const [activeTab, setActiveTab] = useState("Details");
   const tabs = ["Details", "Attendees", "Photos"];
 
   const [eventDetails, setEventDetails] = useState({
-    name: isManageMode ? "TechNova Summit '26" : "",
-    company: isManageMode ? "TechNova Inc." : "",
-    date: isManageMode ? "2026-10-12" : "",
-    location: isManageMode ? "San Francisco, CA" : "",
+    name: "",
+    company: "",
+    date: "",
+    location: "",
     type: "Private",
-    status: isManageMode ? "Upcoming" : "Draft",
-    thumbnailUrl: isManageMode
-      ? "https://images.unsplash.com/photo-1540575467063-178a50c2df87?auto=format&fit=crop&q=80&w=400"
-      : null,
+    status: "Draft",
+    thumbnailUrl: null,
   });
+  const [resolvedEventId, setResolvedEventId] = useState(eventId || "");
+  const [loading, setLoading] = useState(isManageMode);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
 
   // Mandatory Field Validation
   const isFormValid = useMemo(() => {
+    if (eventDetails.status === "Draft") {
+      return true;
+    }
     return (
       eventDetails.name.trim() !== "" &&
       eventDetails.date !== "" &&
@@ -107,8 +118,10 @@ const App = () => {
   }, [eventDetails]);
 
   const fileInputRef = useRef(null);
+  const coverInputRef = useRef(null);
   const statusDropdownRef = useRef(null);
   const [isStatusOpen, setIsStatusOpen] = useState(false);
+  const [isUploadingCover, setIsUploadingCover] = useState(false);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -124,41 +137,129 @@ const App = () => {
   }, []);
 
   const [inviteEmail, setInviteEmail] = useState("");
-  const [attendees, setAttendees] = useState([
-    { id: "1", email: "alex.morgan@example.com", status: "Registered" },
-    { id: "2", email: "sam.taylor@company.co", status: "Pending" },
-  ]);
+  const [attendees, setAttendees] = useState([]);
 
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedPhotoIds, setSelectedPhotoIds] = useState([]);
-  const [photos, setPhotos] = useState([
-    {
-      id: "p1",
-      url: "https://images.unsplash.com/photo-1540575467063-178a50c2df87?auto=format&fit=crop&q=80&w=400",
+  const [photos, setPhotos] = useState([]);
+
+  const withToken = useCallback(async (fn) => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      throw new Error("Session expired. Please login again.");
+    }
+    return fn(session.access_token, session.user.id);
+  }, []);
+
+  const normalizeStatusForApi = (status) => status.toLowerCase();
+  const normalizeTypeForApi = (type) => type.toLowerCase();
+
+  const hydrateFromServer = useCallback(
+    async (targetEventId) => {
+      if (!targetEventId) return;
+      setLoading(true);
+      setError("");
+      try {
+        const data = await withToken((token) =>
+          apiRequest(`/organiser/events/${targetEventId}`, {
+            token,
+          }),
+        );
+
+        const event = data?.event;
+        const attendeesData = data?.attendees || [];
+        const photosData = data?.photos || [];
+        if (!event) return;
+
+        setEventDetails({
+          name: event.name || "",
+          company: event.organizing_company || "",
+          date: event.date || "",
+          location: event.location || "",
+          type: event.type === "public" ? "Public" : "Private",
+          status: event.status
+            ? `${event.status[0].toUpperCase()}${event.status.slice(1)}`
+            : "Draft",
+          thumbnailUrl: event.image_url || null,
+        });
+
+        setAttendees(
+          attendeesData.map((attendee) => ({
+            id: attendee.id,
+            email: attendee.email,
+            status: attendee.user_id ? "Registered" : "Pending",
+          })),
+        );
+        setPhotos(
+          photosData.map((photo, index) => ({
+            id: photo.id,
+            storagePath: photo.storage_path,
+            url:
+              photo.image_url ||
+              `https://images.unsplash.com/photo-1515187029135-18ee286d815b?auto=format&fit=crop&q=80&w=${620 + (index % 4) * 60}`,
+          })),
+        );
+      } catch (requestError) {
+        setError(requestError instanceof Error ? requestError.message : String(requestError));
+      } finally {
+        setLoading(false);
+      }
     },
-    {
-      id: "p2",
-      url: "https://images.unsplash.com/photo-1515187029135-18ee286d815b?auto=format&fit=crop&q=80&w=400",
-    },
-    {
-      id: "p3",
-      url: "https://images.unsplash.com/photo-1517457373958-b7bdd4587205?auto=format&fit=crop&q=80&w=400",
-    },
-  ]);
+    [withToken],
+  );
+
+  useEffect(() => {
+    if (!isManageMode || !eventId) return;
+    hydrateFromServer(eventId);
+  }, [eventId, hydrateFromServer, isManageMode]);
 
   const handleAddEmail = (e) => {
     e.preventDefault();
     if (!inviteEmail.trim()) return;
-    const newStatus = Math.random() > 0.5 ? "Registered" : "Pending";
-    setAttendees([
-      { id: Date.now().toString(), email: inviteEmail, status: newStatus },
-      ...attendees,
-    ]);
-    setInviteEmail("");
+    if (!resolvedEventId) {
+      setError("Save event details first before adding attendees.");
+      return;
+    }
+    const run = async () => {
+      setError("");
+      try {
+        await withToken((token) =>
+          apiRequest(`/organiser/events/${resolvedEventId}/attendees`, {
+            method: "POST",
+            token,
+            body: {
+              emails: [inviteEmail.trim().toLowerCase()],
+            },
+          }),
+        );
+        setInviteEmail("");
+        await hydrateFromServer(resolvedEventId);
+      } catch (requestError) {
+        setError(requestError instanceof Error ? requestError.message : String(requestError));
+      }
+    };
+    run();
   };
 
   const handleRemoveAttendee = (id) => {
-    setAttendees(attendees.filter((a) => a.id !== id));
+    if (!resolvedEventId) return;
+    const run = async () => {
+      setError("");
+      try {
+        await withToken((token) =>
+          apiRequest(`/organiser/events/${resolvedEventId}/attendees/${id}`, {
+            method: "DELETE",
+            token,
+          }),
+        );
+        setAttendees((previous) => previous.filter((attendee) => attendee.id !== id));
+      } catch (requestError) {
+        setError(requestError instanceof Error ? requestError.message : String(requestError));
+      }
+    };
+    run();
   };
 
   const handleToggleSelectMode = () => {
@@ -183,22 +284,182 @@ const App = () => {
   };
 
   const handleDeleteSelectedPhotos = () => {
-    setPhotos(photos.filter((p) => !selectedPhotoIds.includes(p.id)));
-    setIsSelectMode(false);
-    setSelectedPhotoIds([]);
+    if (!resolvedEventId || !selectedPhotoIds.length) return;
+    const run = async () => {
+      setError("");
+      try {
+        await withToken((token) =>
+          apiRequest(`/organiser/events/${resolvedEventId}/photos`, {
+            method: "DELETE",
+            token,
+            body: {
+              photo_ids: selectedPhotoIds,
+            },
+          }),
+        );
+        setPhotos((previous) =>
+          previous.filter((photo) => !selectedPhotoIds.includes(photo.id)),
+        );
+        setIsSelectMode(false);
+        setSelectedPhotoIds([]);
+      } catch (requestError) {
+        setError(requestError instanceof Error ? requestError.message : String(requestError));
+      }
+    };
+    run();
   };
 
   const handlePhotoUpload = (e) => {
-    const files = Array.from(e.target.files);
-    if (files.length === 0) return;
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    if (!resolvedEventId) {
+      setError("Save event details first before uploading photos.");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
 
-    const newPhotos = files.map((file) => ({
-      id: Math.random().toString(36).substr(2, 9),
-      url: URL.createObjectURL(file),
-    }));
+    const run = async () => {
+      setError("");
+      try {
+        await withToken(async (token, userId) => {
+          const storage = supabase.storage.from(eventPhotosBucket);
+          const payload = [];
+          for (const file of files) {
+            const ext = file.name.includes(".") ? file.name.split(".").pop() : "jpg";
+            const baseName = file.name.replace(/\.[^/.]+$/, "");
+            const safeName = baseName.replace(/[^a-zA-Z0-9._-]/g, "_");
+            const path = `${resolvedEventId}/${userId}/${Date.now()}-${safeName}.${ext}`;
+            const uploaded = await storage.upload(path, file, {
+              cacheControl: "3600",
+              upsert: false,
+              contentType: file.type || "image/jpeg",
+            });
+            if (uploaded.error) {
+              throw new Error(uploaded.error.message);
+            }
 
-    setPhotos((prev) => [...newPhotos, ...prev]);
-    if (fileInputRef.current) fileInputRef.current.value = "";
+            payload.push({
+              storage_path: path,
+              image_url: null,
+            });
+          }
+
+          await apiRequest(`/organiser/events/${resolvedEventId}/photos`, {
+            method: "POST",
+            token,
+            body: {
+              photos: payload,
+            },
+          });
+        });
+
+        await hydrateFromServer(resolvedEventId);
+      } catch (requestError) {
+        setError(requestError instanceof Error ? requestError.message : String(requestError));
+      } finally {
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
+    };
+    run();
+  };
+
+  const handleCoverUpload = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const run = async () => {
+      setIsUploadingCover(true);
+      setError("");
+      try {
+        await withToken(async (_token, userId) => {
+          const ext = file.name.includes(".") ? file.name.split(".").pop() : "jpg";
+          const baseName = file.name.replace(/\.[^/.]+$/, "");
+          const safeName = baseName.replace(/[^a-zA-Z0-9._-]/g, "_");
+          const path = `covers/${userId}/${Date.now()}-${safeName}.${ext}`;
+          const storage = supabase.storage.from(eventCoversBucket);
+          const uploaded = await storage.upload(path, file, {
+            cacheControl: "3600",
+            upsert: false,
+            contentType: file.type || "image/jpeg",
+          });
+          if (uploaded.error) {
+            throw new Error(uploaded.error.message);
+          }
+
+          const publicUrl = storage.getPublicUrl(path).data?.publicUrl || null;
+          if (!publicUrl) {
+            throw new Error(
+              `Cover upload succeeded but URL is unavailable. Ensure bucket "${eventCoversBucket}" allows read access.`,
+            );
+          }
+
+          setEventDetails((previous) => ({
+            ...previous,
+            thumbnailUrl: publicUrl,
+          }));
+        });
+      } catch (requestError) {
+        setError(requestError instanceof Error ? requestError.message : String(requestError));
+      } finally {
+        setIsUploadingCover(false);
+        if (event.target) {
+          event.target.value = "";
+        }
+      }
+    };
+
+    run();
+  };
+
+  const handleSavePublish = () => {
+    const run = async () => {
+      setIsSaving(true);
+      setError("");
+      setSuccessMessage("");
+      try {
+        const payload = {
+          name: eventDetails.name.trim() || undefined,
+          date: eventDetails.date || undefined,
+          location: eventDetails.location.trim() || undefined,
+          organizing_company: eventDetails.company.trim() || null,
+          image_url: eventDetails.thumbnailUrl || null,
+          type: normalizeTypeForApi(eventDetails.type),
+          status: normalizeStatusForApi(eventDetails.status),
+        };
+
+        const result = await withToken((token) => {
+          if (resolvedEventId) {
+            return apiRequest(`/organiser/events/${resolvedEventId}`, {
+              method: "PATCH",
+              token,
+              body: payload,
+            });
+          }
+          return apiRequest("/organiser/events", {
+            method: "POST",
+            token,
+            body: payload,
+          });
+        });
+
+        const savedEventId = result?.event?.id || resolvedEventId;
+        if (savedEventId) {
+          setResolvedEventId(savedEventId);
+        }
+
+        if (!resolvedEventId && savedEventId) {
+          setSuccessMessage("Event created. You can now add attendees and photos.");
+          navigate(`/organiser/events/${savedEventId}/edit`, { replace: true });
+        } else {
+          setSuccessMessage("Event saved successfully.");
+        }
+      } catch (requestError) {
+        setError(requestError instanceof Error ? requestError.message : String(requestError));
+      } finally {
+        setIsSaving(false);
+      }
+    };
+    run();
   };
 
   return (
@@ -221,7 +482,10 @@ const App = () => {
         <div className="bg-white border-b border-gray-200 px-4 sm:px-8 py-8 shrink-0 z-10">
           <div className="max-w-5xl mx-auto flex flex-col sm:flex-row sm:items-end justify-between gap-6">
             <div className="flex items-start gap-4">
-              <button className="mt-1 p-2 -ml-2 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-full transition-colors">
+              <button
+                onClick={() => navigate("/organiser/dashboard")}
+                className="mt-1 p-2 -ml-2 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-full transition-colors"
+              >
                 <ArrowLeft size={20} />
               </button>
               <div>
@@ -239,10 +503,11 @@ const App = () => {
                 </div>
               )}
               <button
-                disabled={!isFormValid}
+                disabled={!isFormValid || isSaving}
+                onClick={handleSavePublish}
                 className="w-full sm:w-auto px-6 py-3 bg-[#2563eb] text-white rounded-xl text-sm font-semibold shadow-sm hover:bg-blue-700 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:grayscale-[0.5]"
               >
-                Save & Publish
+                {isSaving ? "Saving..." : "Save & Publish"}
               </button>
             </div>
           </div>
@@ -251,6 +516,24 @@ const App = () => {
         {/* Content Area */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar">
           <div className="max-w-5xl mx-auto">
+            {loading ? (
+              <div className="mb-6 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-600">
+                Loading event...
+              </div>
+            ) : null}
+
+            {error ? (
+              <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {error}
+              </div>
+            ) : null}
+
+            {successMessage ? (
+              <div className="mb-6 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+                {successMessage}
+              </div>
+            ) : null}
+
             {/* Tabs */}
             <div className="flex items-center gap-2 overflow-x-auto no-scrollbar mb-6">
               {tabs.map((tab) => (
@@ -450,17 +733,44 @@ const App = () => {
                         (Optional)
                       </span>
                     </label>
-                    <div className="w-full h-full min-h-[220px] border-2 border-dashed border-gray-200 rounded-2xl bg-gray-50/50 hover:bg-blue-50/30 hover:border-blue-200 transition-all cursor-pointer flex flex-col items-center justify-center text-center p-6 group">
-                      <div className="w-14 h-14 bg-white border border-gray-100 rounded-full flex items-center justify-center text-gray-400 mb-4 shadow-sm group-hover:text-[#2563eb] group-hover:scale-110 transition-all">
-                        <UploadCloud size={24} />
-                      </div>
-                      <h4 className="text-sm font-bold text-gray-900">
-                        Upload Cover Image
-                      </h4>
-                      <p className="text-xs text-gray-500 mt-2 max-w-[180px] leading-relaxed">
-                        Drag and drop or click to browse. <br />
-                        16:9 ratio recommended.
-                      </p>
+                    <input
+                      ref={coverInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handleCoverUpload}
+                    />
+                    <div
+                      onClick={() => coverInputRef.current?.click()}
+                      className="w-full h-full min-h-[220px] border-2 border-dashed border-gray-200 rounded-2xl bg-gray-50/50 hover:bg-blue-50/30 hover:border-blue-200 transition-all cursor-pointer flex flex-col items-center justify-center text-center p-6 group overflow-hidden"
+                    >
+                      {eventDetails.thumbnailUrl ? (
+                        <div className="relative w-full h-full min-h-[220px] rounded-xl overflow-hidden">
+                          <img
+                            src={eventDetails.thumbnailUrl}
+                            alt="Event cover"
+                            className="w-full h-full object-cover"
+                          />
+                          <div className="absolute inset-0 bg-black/25 group-hover:bg-black/35 transition-colors flex items-center justify-center">
+                            <span className="px-3 py-1.5 text-xs font-bold rounded-lg bg-white/90 text-gray-900">
+                              {isUploadingCover ? "Uploading..." : "Change Cover"}
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="w-14 h-14 bg-white border border-gray-100 rounded-full flex items-center justify-center text-gray-400 mb-4 shadow-sm group-hover:text-[#2563eb] group-hover:scale-110 transition-all">
+                            <UploadCloud size={24} />
+                          </div>
+                          <h4 className="text-sm font-bold text-gray-900">
+                            {isUploadingCover ? "Uploading Cover..." : "Upload Cover Image"}
+                          </h4>
+                          <p className="text-xs text-gray-500 mt-2 max-w-[180px] leading-relaxed">
+                            Drag and drop or click to browse. <br />
+                            16:9 ratio recommended.
+                          </p>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>

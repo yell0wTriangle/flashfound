@@ -12,7 +12,7 @@ const notificationIdParamSchema = z.object({
 
 export function createNotificationsRoutes(service = createNotificationsService()) {
   const router = Router();
-  router.use(auth, onboardingRequired);
+  router.use("/notifications", auth, onboardingRequired);
 
   router.get("/notifications", async (req, res, next) => {
     try {

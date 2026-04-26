@@ -1,0 +1,158 @@
+{
+  "info": {
+    "name": "FlashFound API",
+    "_postman_id": "a2e0d715-0cd4-45d7-8b9e-77a2d2c3e123",
+    "description": "Core FlashFound API requests for attendee, organiser, verification, and admin flows.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:8080/api/v1" },
+    { "key": "userToken", "value": "" },
+    { "key": "adminToken", "value": "" },
+    { "key": "eventId", "value": "" },
+    { "key": "verificationSessionId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Profile Bootstrap",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{userToken}}" }
+        ],
+        "url": { "raw": "{{baseUrl}}/profile/bootstrap", "host": ["{{baseUrl}}"], "path": ["profile", "bootstrap"] }
+      }
+    },
+    {
+      "name": "Onboarding Status",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{userToken}}" }
+        ],
+        "url": { "raw": "{{baseUrl}}/profile/onboarding-status", "host": ["{{baseUrl}}"], "path": ["profile", "onboarding-status"] }
+      }
+    },
+    {
+      "name": "Verification Start",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{userToken}}" }
+        ],
+        "url": { "raw": "{{baseUrl}}/verification/session/start", "host": ["{{baseUrl}}"], "path": ["verification", "session", "start"] }
+      }
+    },
+    {
+      "name": "Verification Submit",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{userToken}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"selfie_url\": \"https://images.unsplash.com/photo-1500648767791-00dcc994a43e?fm=jpg&q=90&w=900\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/verification/session/{{verificationSessionId}}/submit",
+          "host": ["{{baseUrl}}"],
+          "path": ["verification", "session", "{{verificationSessionId}}", "submit"]
+        }
+      }
+    },
+    {
+      "name": "Verification Finalize",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{userToken}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/verification/session/{{verificationSessionId}}/finalize",
+          "host": ["{{baseUrl}}"],
+          "path": ["verification", "session", "{{verificationSessionId}}", "finalize"]
+        }
+      }
+    },
+    {
+      "name": "Events Discovery",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{userToken}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/events/discovery?privacy=all",
+          "host": ["{{baseUrl}}"],
+          "path": ["events", "discovery"],
+          "query": [{ "key": "privacy", "value": "all" }]
+        }
+      }
+    },
+    {
+      "name": "Event Results",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{userToken}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/events/{{eventId}}/results",
+          "host": ["{{baseUrl}}"],
+          "path": ["events", "{{eventId}}", "results"]
+        }
+      }
+    },
+    {
+      "name": "Add To My Photos",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{userToken}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"photo_ids\": [\"00000000-0000-0000-0000-000000000000\"]\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/my-photos", "host": ["{{baseUrl}}"], "path": ["my-photos"] }
+      }
+    },
+    {
+      "name": "Notifications",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{userToken}}" }
+        ],
+        "url": { "raw": "{{baseUrl}}/notifications", "host": ["{{baseUrl}}"], "path": ["notifications"] }
+      }
+    },
+    {
+      "name": "Admin Auth",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"access_key\": \"<your-admin-access-key>\"\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/admin/auth", "host": ["{{baseUrl}}"], "path": ["admin", "auth"] }
+      }
+    },
+    {
+      "name": "Admin List Organiser Requests",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{adminToken}}" }
+        ],
+        "url": { "raw": "{{baseUrl}}/admin/organiser-requests", "host": ["{{baseUrl}}"], "path": ["admin", "organiser-requests"] }
+      }
+    }
+  ]
+}

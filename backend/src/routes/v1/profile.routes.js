@@ -6,6 +6,7 @@ import { createProfileService } from "../../services/profileService.js";
 import { ApiError } from "../../utils/apiError.js";
 import { createProfileRepository } from "../../repositories/profileRepository.js";
 import { createVerificationRepository } from "../../repositories/verificationRepository.js";
+import { createPhotoMatchingService } from "../../services/photoMatchingService.js";
 
 const profilePatchSchema = z
   .object({
@@ -21,7 +22,11 @@ const verificationPatchSchema = z.object({
 });
 
 export function createProfileRoutes(
-  service = createProfileService(createProfileRepository(), createVerificationRepository()),
+  service = createProfileService(
+    createProfileRepository(),
+    createVerificationRepository(),
+    createPhotoMatchingService(),
+  ),
 ) {
   const router = Router();
 

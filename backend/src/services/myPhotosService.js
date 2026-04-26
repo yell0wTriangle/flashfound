@@ -10,6 +10,31 @@ function indexBy(items, key) {
   return map;
 }
 
+function isPhotoVisibleToAttendees(photo) {
+  if (!photo) return false;
+  if (!Object.prototype.hasOwnProperty.call(photo, "face_processing_status")) {
+    return true;
+  }
+  if (photo.face_processing_status == null) {
+    return true;
+  }
+  return photo.face_processing_status === "processed" && !photo.face_processing_error;
+}
+
+async function resolvePhotoUrl(repository, photo) {
+  if (photo.image_url) {
+    return photo.image_url;
+  }
+  if (!repository?.createSignedPhotoUrl) {
+    return null;
+  }
+  try {
+    return await repository.createSignedPhotoUrl(photo.storage_path, 60 * 30);
+  } catch {
+    return null;
+  }
+}
+
 export function createMyPhotosService({
   myPhotosRepository = createMyPhotosRepository(),
   eventsRepository = createEventsRepository(),
@@ -30,11 +55,59 @@ export function createMyPhotosService({
         email: user.email || "",
       });
       const accessibleEventIds = unique(attendeeRows.map((row) => row.event_id).filter(Boolean));
-      const accessiblePhotoIds = photos
-        .filter((photo) => accessibleEventIds.includes(photo.event_id))
-        .map((photo) => photo.id);
+      const accessiblePhotos = photos.filter((photo) => accessibleEventIds.includes(photo.event_id));
+      const visibleAccessiblePhotos = accessiblePhotos.filter((photo) => isPhotoVisibleToAttendees(photo));
+      const accessiblePhotoIds = visibleAccessiblePhotos.map((photo) => photo.id);
 
-      const insertedRows = await myPhotosRepository.upsertMyPhotos(user.id, accessiblePhotoIds);
+      if (!accessiblePhotoIds.length) {
+        return { added_count: 0, photo_ids: [] };
+      }
+
+      const eventIds = unique(visibleAccessiblePhotos.map((photo) => photo.event_id).filter(Boolean));
+      const [eventRows, photoPeopleRows] = await Promise.all([
+        eventsRepository.getEventsByIds(eventIds, { privacyType: "all", search: "" }),
+        eventsRepository.getPhotoPeopleByPhotoIds(accessiblePhotoIds),
+      ]);
+
+      const eventById = new Map(eventRows.map((event) => [event.id, event]));
+      const peopleByPhotoId = new Map();
+      photoPeopleRows.forEach((entry) => {
+        if (!peopleByPhotoId.has(entry.photo_id)) {
+          peopleByPhotoId.set(entry.photo_id, []);
+        }
+        peopleByPhotoId.get(entry.photo_id).push(entry.person_user_id);
+      });
+
+      const privateAllowedByEvent = new Map();
+      const ensurePrivateAllowed = async (eventId) => {
+        if (privateAllowedByEvent.has(eventId)) {
+          return privateAllowedByEvent.get(eventId);
+        }
+        const granted = await eventsRepository.getPrivateAccessGrantedTargets({
+          eventId,
+          requesterUserId: user.id,
+        });
+        const allowed = new Set([user.id, ...granted]);
+        privateAllowedByEvent.set(eventId, allowed);
+        return allowed;
+      };
+
+      const visiblePhotoIds = [];
+      for (const photo of visibleAccessiblePhotos) {
+        const event = eventById.get(photo.event_id);
+        if (!event || event.privacy_type !== "private") {
+          visiblePhotoIds.push(photo.id);
+          continue;
+        }
+
+        const allowed = await ensurePrivateAllowed(photo.event_id);
+        const peopleInPhoto = peopleByPhotoId.get(photo.id) || [];
+        if (peopleInPhoto.some((personId) => allowed.has(personId))) {
+          visiblePhotoIds.push(photo.id);
+        }
+      }
+
+      const insertedRows = await myPhotosRepository.upsertMyPhotos(user.id, visiblePhotoIds);
       return {
         added_count: insertedRows.length,
         photo_ids: unique(insertedRows.map((row) => row.photo_id)),
@@ -53,8 +126,9 @@ export function createMyPhotosService({
       const selectedPersonIds = parseCsvIds(personIdsCsv);
 
       const photos = await eventsRepository.getPhotosByIds(photoIds);
-      const byPhotoId = indexBy(photos, "id");
-      const existingPhotoIds = photos.map((photo) => photo.id);
+      const visiblePhotos = photos.filter((photo) => isPhotoVisibleToAttendees(photo));
+      const byPhotoId = indexBy(visiblePhotos, "id");
+      const existingPhotoIds = visiblePhotos.map((photo) => photo.id);
       const photoPeopleRows = await eventsRepository.getPhotoPeopleByPhotoIds(existingPhotoIds);
 
       const peopleByPhoto = new Map();
@@ -95,17 +169,20 @@ export function createMyPhotosService({
       const profiles = personIds.length ? await eventsRepository.getProfilesByIds(personIds) : [];
       const profilesById = indexBy(profiles, "id");
 
+      const photosWithUrls = await Promise.all(
+        filteredRows.map(async (row) => {
+          const photo = byPhotoId.get(row.photo_id);
+          if (!photo) return null;
+          return toPhotoResponse(photo, {
+            people: peopleByPhoto.get(photo.id) || [],
+            added_at: row.added_at,
+            image_url: await resolvePhotoUrl(eventsRepository, photo),
+          });
+        }),
+      );
+
       return {
-        photos: filteredRows
-          .map((row) => {
-            const photo = byPhotoId.get(row.photo_id);
-            if (!photo) return null;
-            return toPhotoResponse(photo, {
-              people: peopleByPhoto.get(photo.id) || [],
-              added_at: row.added_at,
-            });
-          })
-          .filter(Boolean),
+        photos: photosWithUrls.filter(Boolean),
         events: events.map((event) => ({
           id: event.id,
           name: event.name,

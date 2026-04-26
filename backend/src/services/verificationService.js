@@ -3,6 +3,7 @@ import { env } from "../config/env.js";
 import { createVerificationRepository } from "../repositories/verificationRepository.js";
 import { createProfileRepository } from "../repositories/profileRepository.js";
 import { createFaceVerifier } from "./faceVerifier.js";
+import { createPhotoMatchingService } from "./photoMatchingService.js";
 
 function ensureSessionOwner(session, userId) {
   if (!session || session.user_id !== userId) {
@@ -20,6 +21,7 @@ export function createVerificationService({
   verificationRepository = createVerificationRepository(),
   profileRepository = createProfileRepository(),
   faceVerifier = createFaceVerifier(),
+  photoMatchingService = createPhotoMatchingService(),
 } = {}) {
   return {
     async startSession({ userId }) {
@@ -69,6 +71,7 @@ export function createVerificationService({
         face_count: result.face_count,
         quality_score: result.quality_score,
         failure_code: result.failure_code,
+        face_embedding: result.face_embedding || null,
         status: result.passed ? "submitted" : "pending",
         submitted_at: result.passed ? new Date().toISOString() : null,
       };
@@ -100,6 +103,7 @@ export function createVerificationService({
 
       const updatedProfile = await profileRepository.updateById(userId, {
         verification_selfie_url: session.selfie_url,
+        verification_face_embedding: session.face_embedding || null,
         face_verification_completed: true,
       });
 
@@ -109,9 +113,15 @@ export function createVerificationService({
         failure_code: null,
       });
 
+      const rematch = await photoMatchingService.rematchUserAcrossAccessiblePhotos({
+        userId,
+        email: updatedProfile.email,
+      });
+
       return {
         session: finalizedSession,
         profile: updatedProfile,
+        rematch,
       };
     },
 

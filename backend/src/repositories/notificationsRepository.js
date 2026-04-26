@@ -60,6 +60,17 @@ export function createNotificationsRepository(client = supabaseAdmin) {
       if (error) throw error;
       return data ?? [];
     },
+
+    async listAddedToEventByRecipientAndEventIds(recipientUserId, eventIds) {
+      if (!eventIds?.length) return [];
+      const { data, error } = await client
+        .from("notifications")
+        .select("id,event_id")
+        .eq("recipient_user_id", recipientUserId)
+        .eq("type", "added_to_event")
+        .in("event_id", eventIds);
+      if (error) throw error;
+      return data ?? [];
+    },
   };
 }
-

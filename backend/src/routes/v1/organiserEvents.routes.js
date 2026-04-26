@@ -42,6 +42,10 @@ const photosSchema = z.object({
 const deletePhotosSchema = z.object({
   photo_ids: z.array(z.string().uuid()).min(1),
 });
+
+const reprocessPhotosSchema = z.object({
+  photo_ids: z.array(z.string().uuid()).min(1).optional(),
+});
 const eventIdParamSchema = z.object({
   eventId: z.string().uuid(),
 });
@@ -92,6 +96,22 @@ export function createOrganiserEventsRoutes(service = createOrganiserEventsServi
   router.get("/organiser/events", async (req, res, next) => {
     try {
       const data = await service.listEvents({ user: req.user });
+      res.status(200).json(apiSuccess(data));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/organiser/events/:eventId", async (req, res, next) => {
+    try {
+      const params = eventIdParamSchema.safeParse(req.params);
+      if (!params.success) {
+        throw new ApiError(400, "VALIDATION_ERROR", "Invalid event id", params.error.format());
+      }
+      const data = await service.getEventById({
+        user: req.user,
+        eventId: params.data.eventId,
+      });
       res.status(200).json(apiSuccess(data));
     } catch (error) {
       next(error);
@@ -181,6 +201,27 @@ export function createOrganiserEventsRoutes(service = createOrganiserEventsServi
   router.get("/organiser/dashboard", async (req, res, next) => {
     try {
       const data = await service.dashboard({ user: req.user });
+      res.status(200).json(apiSuccess(data));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/organiser/events/:eventId/photos/reprocess", async (req, res, next) => {
+    try {
+      const params = eventIdParamSchema.safeParse(req.params);
+      if (!params.success) {
+        throw new ApiError(400, "VALIDATION_ERROR", "Invalid event id", params.error.format());
+      }
+      const parsed = reprocessPhotosSchema.safeParse(req.body || {});
+      if (!parsed.success) {
+        throw new ApiError(400, "VALIDATION_ERROR", "Invalid reprocess payload", parsed.error.format());
+      }
+      const data = await service.reprocessPhotos({
+        user: req.user,
+        eventId: params.data.eventId,
+        photoIds: parsed.data.photo_ids || [],
+      });
       res.status(200).json(apiSuccess(data));
     } catch (error) {
       next(error);

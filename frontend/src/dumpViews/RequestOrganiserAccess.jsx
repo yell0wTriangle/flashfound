@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Camera,
   Menu,
@@ -14,6 +15,8 @@ import {
   Mail,
   Zap,
 } from "lucide-react";
+import { apiRequest } from "../lib/api.js";
+import { supabase } from "../lib/supabase.js";
 
 // Inlined NavBar component for the preview environment
 const NavBar = ({ activePage }) => {
@@ -67,16 +70,57 @@ const NavBar = ({ activePage }) => {
 };
 
 const App = () => {
+  const navigate = useNavigate();
   // Request State: 'idle' | 'submitting' | 'success'
   const [requestStatus, setRequestStatus] = useState("idle");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    const checkRole = async () => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session?.access_token) return;
+        const onboarding = await apiRequest("/profile/onboarding-status", {
+          token: session.access_token,
+        });
+        if (!cancelled && onboarding?.role === "organiser") {
+          navigate("/organiser/dashboard", { replace: true });
+        }
+      } catch {
+        // no-op here, request page can still render
+      }
+    };
+    checkRole();
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate]);
 
   const handleRequestAccess = () => {
-    setRequestStatus("submitting");
-
-    // Simulate backend verification request
-    setTimeout(() => {
-      setRequestStatus("success");
-    }, 1500);
+    const submit = async () => {
+      setRequestStatus("submitting");
+      setError("");
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session?.access_token) {
+          throw new Error("Session expired. Please log in again.");
+        }
+        await apiRequest("/organiser-access/request", {
+          method: "POST",
+          token: session.access_token,
+        });
+        setRequestStatus("success");
+      } catch (requestError) {
+        setRequestStatus("idle");
+        setError(requestError instanceof Error ? requestError.message : String(requestError));
+      }
+    };
+    submit();
   };
 
   return (
@@ -142,6 +186,12 @@ const App = () => {
                 </button>
               )}
             </div>
+
+            {error ? (
+              <div className="mb-8 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {error}
+              </div>
+            ) : null}
 
             <hr className="border-gray-100 w-full mb-10" />
 

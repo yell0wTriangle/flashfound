@@ -1,7 +1,10 @@
 /dump
 backend/node_modules
 frontend/node_modules
+frontend/.env
 backend/.env
 *.log
 coverage
 accesstoken.txt
+*.md
+!README.md

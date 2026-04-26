@@ -7,8 +7,23 @@ function createMockRepo(overrides = {}) {
     findById: vi.fn(),
     create: vi.fn(),
     updateById: vi.fn(),
+    linkAttendeeRowsToUserByEmail: vi.fn().mockResolvedValue([]),
     ...overrides,
   };
+}
+
+function createService(repo, overrides = {}) {
+  const notificationsRepository = {
+    createNotification: vi.fn().mockResolvedValue({}),
+    listAddedToEventByRecipientAndEventIds: vi.fn().mockResolvedValue([]),
+    ...(overrides.notificationsRepository || {}),
+  };
+  const eventsRepository = {
+    getAccessibleEventIdsForUser: vi.fn().mockResolvedValue([]),
+    getEventsByIds: vi.fn().mockResolvedValue([]),
+    ...(overrides.eventsRepository || {}),
+  };
+  return createProfileService(repo, undefined, undefined, notificationsRepository, eventsRepository);
 }
 
 describe("profile service", () => {
@@ -23,7 +38,7 @@ describe("profile service", () => {
       role: "attendee",
     });
 
-    const service = createProfileService(repo);
+    const service = createService(repo);
     const result = await service.bootstrapProfile({
       id: "u1",
       email: "user@example.com",
@@ -33,6 +48,10 @@ describe("profile service", () => {
     expect(result.created).toBe(true);
     expect(result.onboarding_status).toBe("new");
     expect(repo.create).toHaveBeenCalledTimes(1);
+    expect(repo.linkAttendeeRowsToUserByEmail).toHaveBeenCalledWith({
+      userId: "u1",
+      email: "user@example.com",
+    });
   });
 
   it("returns existing profile on bootstrap when already present", async () => {
@@ -42,18 +61,22 @@ describe("profile service", () => {
       face_verification_completed: true,
       role: "attendee",
     });
-    const service = createProfileService(repo);
+    const service = createService(repo);
 
     const result = await service.bootstrapProfile({ id: "u1", email: "user@example.com" });
 
     expect(result.created).toBe(false);
     expect(result.onboarding_status).toBe("ready");
     expect(repo.create).not.toHaveBeenCalled();
+    expect(repo.linkAttendeeRowsToUserByEmail).toHaveBeenCalledWith({
+      userId: "u1",
+      email: "user@example.com",
+    });
   });
 
   it("maps onboarding status correctly", async () => {
     const repo = createMockRepo();
-    const service = createProfileService(repo);
+    const service = createService(repo);
 
     repo.findById.mockResolvedValueOnce(null);
     await expect(service.getOnboardingStatus("u1")).resolves.toEqual({
@@ -79,8 +102,38 @@ describe("profile service", () => {
   it("throws profile not found when patching absent profile", async () => {
     const repo = createMockRepo();
     repo.findById.mockResolvedValue(null);
-    const service = createProfileService(repo);
+    const service = createService(repo);
 
     await expect(service.patchProfile("u1", { display_name: "Name" })).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it("creates missing added-to-event notifications during bootstrap", async () => {
+    const repo = createMockRepo({
+      findById: vi.fn().mockResolvedValue({
+        id: "u1",
+        email: "user@example.com",
+        face_verification_completed: true,
+        role: "attendee",
+      }),
+    });
+    const notificationsRepository = {
+      createNotification: vi.fn().mockResolvedValue({}),
+      listAddedToEventByRecipientAndEventIds: vi.fn().mockResolvedValue([]),
+    };
+    const eventsRepository = {
+      getAccessibleEventIdsForUser: vi.fn().mockResolvedValue([{ event_id: "e1" }]),
+      getEventsByIds: vi.fn().mockResolvedValue([{ id: "e1", name: "Demo Event" }]),
+    };
+    const service = createService(repo, { notificationsRepository, eventsRepository });
+
+    await service.bootstrapProfile({ id: "u1", email: "user@example.com" });
+
+    expect(notificationsRepository.createNotification).toHaveBeenCalledWith({
+      recipient_user_id: "u1",
+      type: "added_to_event",
+      title: "Added to Event",
+      message: "You were added to Demo Event",
+      event_id: "e1",
+    });
   });
 });

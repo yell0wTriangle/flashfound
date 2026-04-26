@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Camera,
   Menu,
@@ -9,16 +10,16 @@ import {
   CalendarPlus,
   ShieldCheck,
   Lock,
-  UploadCloud,
   Mail,
   Save,
   LogOut,
   ScanFace,
-  X,
   CheckCircle2,
   RefreshCcw,
-  AlertCircle,
 } from "lucide-react";
+import { apiRequest } from "../lib/api.js";
+import { supabase } from "../lib/supabase.js";
+import { DEFAULT_AVATAR_PLACEHOLDER } from "../lib/avatarPlaceholder.js";
 
 // Inlined NavBar component
 const NavBar = ({ activePage }) => {
@@ -73,72 +74,146 @@ const NavBar = ({ activePage }) => {
 };
 
 const App = () => {
+  const navigate = useNavigate();
+  const avatarInputRef = useRef(null);
+  const avatarBucket = import.meta.env.VITE_SUPABASE_PROFILE_AVATAR_BUCKET || "profile-avatars";
+
   // Profile State
   const [profileData, setProfileData] = useState({
-    displayName: "Alex Morgan",
-    email: "alex.morgan@example.com",
-    publicAvatar: "https://picsum.photos/seed/alex/200/200",
+    displayName: "",
+    email: "",
+    publicAvatar: DEFAULT_AVATAR_PLACEHOLDER,
+    verificationSelfieUrl: "",
+    verificationVerified: false,
+    verificationUpdatedAt: "",
   });
 
   const [isSaving, setIsSaving] = useState(false);
   const [showSavedMsg, setShowSavedMsg] = useState(false);
+  const [error, setError] = useState("");
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
 
-  // Retake Selfie Modal State
-  const [isRetakingSelfie, setIsRetakingSelfie] = useState(false);
-  const [cameraStep, setCameraStep] = useState("camera"); // 'camera' | 'analyzing' | 'success'
-  const [faceDetected, setFaceDetected] = useState(false);
-  const [progress, setProgress] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    const loadProfile = async () => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session?.access_token) return;
+
+        const data = await apiRequest("/profile/me", {
+          token: session.access_token,
+        });
+
+        if (cancelled) return;
+        setProfileData({
+          displayName: data?.profile?.display_name || "",
+          email: data?.profile?.email || session.user.email || "",
+          publicAvatar: data?.profile?.display_avatar_url || DEFAULT_AVATAR_PLACEHOLDER,
+          verificationSelfieUrl: data?.profile?.verification_selfie_url || "",
+          verificationVerified: Boolean(data?.profile?.face_verification_completed),
+          verificationUpdatedAt: data?.profile?.updated_at || "",
+        });
+      } catch (requestError) {
+        if (cancelled) return;
+        setError(requestError instanceof Error ? requestError.message : String(requestError));
+      }
+    };
+    loadProfile();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleSaveProfile = () => {
-    setIsSaving(true);
-    setTimeout(() => {
-      setIsSaving(false);
-      setShowSavedMsg(true);
-      setTimeout(() => setShowSavedMsg(false), 3000);
-    }, 1000);
-  };
-
-  // Mock Camera Feed Logic
-  useEffect(() => {
-    let detectionInterval;
-    if (isRetakingSelfie && cameraStep === "camera") {
-      detectionInterval = setInterval(() => {
-        setFaceDetected(Math.random() > 0.3);
-      }, 1500);
-    } else {
-      setFaceDetected(false);
-    }
-    return () => clearInterval(detectionInterval);
-  }, [isRetakingSelfie, cameraStep]);
-
-  // Mock Processing Logic
-  useEffect(() => {
-    let interval;
-    if (cameraStep === "analyzing") {
-      setProgress(0);
-      interval = setInterval(() => {
-        setProgress((prev) => {
-          if (prev >= 100) {
-            clearInterval(interval);
-            setTimeout(() => setCameraStep("success"), 400);
-            return 100;
-          }
-          return prev + 5;
+    const submit = async () => {
+      setIsSaving(true);
+      setError("");
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session?.access_token) {
+          throw new Error("Session expired. Please login again.");
+        }
+        await apiRequest("/profile/me", {
+          method: "PATCH",
+          token: session.access_token,
+          body: {
+            display_name: profileData.displayName,
+            display_avatar_url: profileData.publicAvatar,
+          },
         });
-      }, 50);
-    }
-    return () => clearInterval(interval);
-  }, [cameraStep]);
-
-  const handleCaptureSelfie = () => {
-    if (!faceDetected) return;
-    setCameraStep("analyzing");
+        setShowSavedMsg(true);
+        setTimeout(() => setShowSavedMsg(false), 2500);
+      } catch (requestError) {
+        setError(requestError instanceof Error ? requestError.message : String(requestError));
+      } finally {
+        setIsSaving(false);
+      }
+    };
+    submit();
   };
 
-  const closeCameraModal = () => {
-    setIsRetakingSelfie(false);
-    setCameraStep("camera");
-    setProgress(0);
+  const handleAvatarUpload = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const upload = async () => {
+      setIsUploadingAvatar(true);
+      setError("");
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session?.access_token) {
+          throw new Error("Session expired. Please login again.");
+        }
+        const ext = file.name.includes(".") ? file.name.split(".").pop() : "jpg";
+        const path = `${session.user.id}/avatar-${Date.now()}.${ext}`;
+        const storage = supabase.storage.from(avatarBucket);
+        const uploaded = await storage.upload(path, file, {
+          cacheControl: "3600",
+          upsert: true,
+          contentType: file.type || "image/jpeg",
+        });
+        if (uploaded.error) {
+          throw new Error(uploaded.error.message);
+        }
+
+        const publicUrl = storage.getPublicUrl(path).data?.publicUrl;
+        const avatarUrl = publicUrl || profileData.publicAvatar;
+
+        setProfileData((previous) => ({
+          ...previous,
+          publicAvatar: avatarUrl,
+        }));
+      } catch (requestError) {
+        setError(
+          requestError instanceof Error
+            ? requestError.message
+            : "Avatar upload failed. Check storage bucket policies.",
+        );
+      } finally {
+        setIsUploadingAvatar(false);
+        if (event.target) {
+          event.target.value = "";
+        }
+      }
+    };
+    upload();
+  };
+
+  const handleSignOut = () => {
+    const signout = async () => {
+      await supabase.auth.signOut();
+      navigate("/");
+    };
+    signout();
+  };
+
+  const handleUpdateSelfie = () => {
+    navigate("/setup/selfie?mode=update");
   };
 
   return (
@@ -178,6 +253,12 @@ const App = () => {
         {/* Content Area */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar">
           <div className="max-w-3xl mx-auto flex flex-col gap-8 pb-12">
+            {error ? (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {error}
+              </div>
+            ) : null}
+
             {/* SECTION 1: PUBLIC PROFILE */}
             <div className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden">
               <div className="p-6 sm:p-8 border-b border-gray-100 flex items-center gap-3">
@@ -198,12 +279,25 @@ const App = () => {
                         className="w-full h-full object-cover group-hover:opacity-70 transition-opacity"
                       />
                     </div>
-                    <button className="absolute bottom-0 right-0 bg-gray-900 text-white p-2.5 rounded-full shadow-lg hover:bg-black transition-transform active:scale-95 group-hover:scale-110">
+                    <button
+                      onClick={() => avatarInputRef.current?.click()}
+                      disabled={isUploadingAvatar}
+                      className="absolute bottom-0 right-0 bg-gray-900 text-white p-2.5 rounded-full shadow-lg hover:bg-black transition-transform active:scale-95 group-hover:scale-110 disabled:opacity-60"
+                    >
                       <Camera size={16} />
                     </button>
                   </div>
+                  <input
+                    ref={avatarInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleAvatarUpload}
+                  />
                   <p className="text-xs text-gray-500 text-center max-w-[140px]">
-                    Visible to organizers and on shared gallery filters.
+                    {isUploadingAvatar
+                      ? "Uploading avatar..."
+                      : "Visible to organizers and on shared gallery filters."}
                   </p>
                 </div>
 
@@ -279,7 +373,10 @@ const App = () => {
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-6 p-5 border border-gray-200 rounded-2xl bg-gray-50">
                   <div className="w-20 h-20 bg-gray-200 rounded-xl overflow-hidden relative shrink-0 border border-gray-300">
                     <img
-                      src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200"
+                      src={
+                        profileData.verificationSelfieUrl ||
+                        "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200"
+                      }
                       alt="Blurred Identity"
                       className="w-full h-full object-cover blur-md scale-110 opacity-70"
                     />
@@ -293,18 +390,26 @@ const App = () => {
 
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse"></span>
+                      <span
+                        className={`w-2.5 h-2.5 rounded-full ${profileData.verificationVerified ? "bg-green-500 animate-pulse" : "bg-amber-500"}`}
+                      ></span>
                       <h4 className="font-bold text-gray-900 text-sm">
-                        Verification Active
+                        {profileData.verificationVerified ? "Verification Active" : "Verification Needed"}
                       </h4>
                     </div>
                     <p className="text-xs text-gray-500">
-                      Last updated on Oct 12, 2026
+                      {profileData.verificationUpdatedAt
+                        ? `Last updated on ${new Date(profileData.verificationUpdatedAt).toLocaleDateString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                            year: "numeric",
+                          })}`
+                        : "No verification selfie on file"}
                     </p>
                   </div>
 
                   <button
-                    onClick={() => setIsRetakingSelfie(true)}
+                    onClick={handleUpdateSelfie}
                     className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-2.5 bg-white border border-gray-300 text-gray-700 rounded-xl text-sm font-semibold shadow-sm hover:bg-gray-100 active:scale-95 transition-all"
                   >
                     <RefreshCcw size={16} /> Update Selfie
@@ -341,7 +446,10 @@ const App = () => {
                 <hr className="border-gray-100 my-2" />
 
                 <div className="flex flex-col sm:flex-row gap-4">
-                  <button className="flex items-center justify-center gap-2 px-5 py-3 bg-red-50 text-red-600 rounded-xl text-sm font-semibold hover:bg-red-100 transition-colors w-fit">
+                  <button
+                    onClick={handleSignOut}
+                    className="flex items-center justify-center gap-2 px-5 py-3 bg-red-50 text-red-600 rounded-xl text-sm font-semibold hover:bg-red-100 transition-colors w-fit"
+                  >
                     <LogOut size={16} /> Sign Out
                   </button>
                 </div>
@@ -350,126 +458,6 @@ const App = () => {
           </div>
         </div>
 
-        {/* RETAKE SELFIE MODAL (Matches Onboarding Step 2) */}
-        {isRetakingSelfie && (
-          <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 sm:p-8 animate-in fade-in duration-200">
-            <div className="w-full max-w-lg bg-white rounded-3xl overflow-hidden shadow-2xl flex flex-col">
-              <div className="flex items-center justify-between p-5 border-b border-gray-100">
-                <h3 className="font-bold text-gray-900 flex items-center gap-2">
-                  <ScanFace size={18} className="text-[#2563eb]" /> Update
-                  Verification Selfie
-                </h3>
-                <button
-                  onClick={closeCameraModal}
-                  className="p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-900 rounded-full transition-colors"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-
-              {cameraStep === "camera" && (
-                <div className="flex flex-col">
-                  <div className="relative w-full aspect-[4/3] sm:aspect-video bg-gray-900 overflow-hidden flex items-center justify-center">
-                    {/* Simulated Camera Feed */}
-                    <img
-                      src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=800"
-                      alt="Camera feed"
-                      className="absolute inset-0 w-full h-full object-cover opacity-70"
-                    />
-
-                    {/* Validation Overlay */}
-                    <div className="absolute inset-0 flex flex-col items-center justify-center p-6">
-                      <div
-                        className={`w-56 h-72 border-2 rounded-[50px] transition-colors duration-500 flex items-end justify-center pb-6 ${faceDetected ? "border-green-400 shadow-[0_0_20px_rgba(74,222,128,0.4)]" : "border-white/40"}`}
-                      >
-                        {!faceDetected && (
-                          <div className="bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-full flex items-center gap-1.5 text-white text-xs font-medium border border-white/10">
-                            <AlertCircle
-                              size={14}
-                              className="text-yellow-400"
-                            />{" "}
-                            Position face in frame
-                          </div>
-                        )}
-                        {faceDetected && (
-                          <div className="bg-green-500/90 backdrop-blur-md px-3 py-1.5 rounded-full flex items-center gap-1.5 text-white text-xs font-bold animate-pulse">
-                            <CheckCircle2 size={14} /> Ready
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="p-6 bg-gray-50 flex items-center justify-center">
-                    <button
-                      onClick={handleCaptureSelfie}
-                      disabled={!faceDetected}
-                      className={`w-16 h-16 rounded-full border-4 p-1 transition-all active:scale-90 ${faceDetected ? "border-[#2563eb] cursor-pointer" : "border-gray-300 cursor-not-allowed opacity-50"}`}
-                    >
-                      <div
-                        className={`w-full h-full rounded-full transition-colors ${faceDetected ? "bg-[#2563eb]" : "bg-gray-200"}`}
-                      ></div>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {cameraStep === "analyzing" && (
-                <div className="p-10 flex flex-col items-center text-center min-h-[360px] justify-center bg-white">
-                  <div className="relative mb-6">
-                    <div className="absolute -inset-4 border-2 border-blue-100 border-t-blue-600 rounded-full animate-spin"></div>
-                    <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-white shadow-lg relative z-10">
-                      <img
-                        src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400"
-                        alt="Processing"
-                        className="w-full h-full object-cover"
-                      />
-                      <div className="absolute inset-0 bg-gradient-to-b from-transparent via-blue-400/30 to-transparent animate-[scan_2s_ease-in-out_infinite]"></div>
-                    </div>
-                  </div>
-                  <h3 className="text-lg font-bold text-gray-900 mb-1">
-                    Updating Verification
-                  </h3>
-                  <p className="text-xs text-gray-500 mb-6">
-                    Securing your new identity...
-                  </p>
-                  <div className="w-full max-w-[200px] h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-blue-600 transition-all duration-75 ease-linear"
-                      style={{ width: `${progress}%` }}
-                    ></div>
-                  </div>
-                </div>
-              )}
-
-              {cameraStep === "success" && (
-                <div className="p-10 flex flex-col items-center text-center min-h-[360px] justify-center bg-white">
-                  <div className="w-20 h-20 bg-green-50 text-green-500 rounded-full flex items-center justify-center mb-5 border border-green-100">
-                    <CheckCircle2 size={40} strokeWidth={2.5} />
-                  </div>
-                  <h3 className="text-xl font-bold text-gray-900 mb-2">
-                    Selfie Updated
-                  </h3>
-                  <p className="text-sm text-gray-500 mb-8 max-w-[260px]">
-                    Your secure verification selfie has been updated. New photos
-                    will be matched against this image.
-                  </p>
-                  <button
-                    onClick={closeCameraModal}
-                    className="w-full px-6 py-3.5 bg-gray-900 text-white rounded-xl font-semibold hover:bg-black active:scale-[0.98] transition-all"
-                  >
-                    Done
-                  </button>
-                </div>
-              )}
-            </div>
-            <style
-              dangerouslySetInnerHTML={{
-                __html: `@keyframes scan { 0% { transform: translateY(-100%); } 100% { transform: translateY(100%); } }`,
-              }}
-            />
-          </div>
-        )}
       </div>
     </div>
   );

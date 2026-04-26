@@ -1,6 +1,9 @@
 import { ApiError } from "../utils/apiError.js";
 import { createOrganiserEventsRepository } from "../repositories/organiserEventsRepository.js";
 import { toPhotoResponse } from "../utils/storage.js";
+import { createPhotoMatchingService } from "./photoMatchingService.js";
+import { createNotificationsRepository } from "../repositories/notificationsRepository.js";
+import { logger } from "../utils/logger.js";
 
 function normalizeEvent(event) {
   return {
@@ -29,7 +32,25 @@ function ensurePublishFields({ name, date, location }) {
   }
 }
 
-export function createOrganiserEventsService(repository = createOrganiserEventsRepository()) {
+async function resolvePhotoUrl(repository, photo) {
+  if (photo.image_url) {
+    return photo.image_url;
+  }
+  if (!repository?.createSignedPhotoUrl) {
+    return null;
+  }
+  try {
+    return await repository.createSignedPhotoUrl(photo.storage_path, 60 * 30);
+  } catch {
+    return null;
+  }
+}
+
+export function createOrganiserEventsService(
+  repository = createOrganiserEventsRepository(),
+  photoMatchingService = createPhotoMatchingService(),
+  notificationsRepository = createNotificationsRepository(),
+) {
   return {
     async createEvent({ user, profile, payload }) {
       const status = payload.status || "draft";
@@ -95,11 +116,43 @@ export function createOrganiserEventsService(repository = createOrganiserEventsR
       };
     },
 
+    async getEventById({ user, eventId }) {
+      const event = await repository.getEventById(eventId);
+      if (!event || event.organiser_user_id !== user.id) {
+        throw new ApiError(404, "EVENT_NOT_FOUND", "Event not found");
+      }
+
+      const [attendees, photos] = await Promise.all([
+        repository.getAttendeesByEventId(eventId),
+        repository.getPhotosByEventId(eventId),
+      ]);
+
+      const normalizedPhotos = await Promise.all(
+        photos.map(async (photo) =>
+          toPhotoResponse(photo, {
+            created_at: photo.created_at,
+            image_url: await resolvePhotoUrl(repository, photo),
+          }),
+        ),
+      );
+
+      return {
+        event: normalizeEvent(event),
+        attendees,
+        photos: normalizedPhotos,
+      };
+    },
+
     async addAttendees({ user, eventId, emails }) {
       const event = await repository.getEventById(eventId);
       if (!event || event.organiser_user_id !== user.id) {
         throw new ApiError(404, "EVENT_NOT_FOUND", "Event not found");
       }
+
+      const existingRows = await repository.getAttendeesByEventId(eventId);
+      const existingByEmail = new Map(
+        existingRows.map((row) => [String(row.email || "").toLowerCase(), row]),
+      );
 
       const normalizedEmails = [...new Set(emails.map((email) => email.trim().toLowerCase()))];
       const profileRows = await repository.getProfilesByEmails(normalizedEmails);
@@ -112,6 +165,47 @@ export function createOrganiserEventsService(repository = createOrganiserEventsR
       }));
 
       const attendees = await repository.upsertAttendees(rows);
+
+      const recipientUserIds = [...new Set(
+        attendees
+          .filter((attendee) => attendee.user_id)
+          .filter((attendee) => {
+            const previous = existingByEmail.get(String(attendee.email || "").toLowerCase());
+            return !previous || previous.user_id !== attendee.user_id;
+          })
+          .map((attendee) => attendee.user_id),
+      )];
+
+      if (recipientUserIds.length) {
+        const eventName = event.name || "an event";
+        await Promise.all(
+          recipientUserIds.map((recipientUserId) =>
+            notificationsRepository.createNotification({
+              recipient_user_id: recipientUserId,
+              type: "added_to_event",
+              title: "Added to Event",
+              message: `You were added to ${eventName}`,
+              event_id: eventId,
+            }),
+          ),
+        );
+      }
+
+      try {
+        await photoMatchingService.reprocessEventPhotos({
+          eventId,
+          photoIds: [],
+        });
+      } catch (error) {
+        logger.warn(
+          {
+            eventId,
+            err: error instanceof Error ? error.message : String(error),
+          },
+          "Attendee add succeeded but photo reprocess failed",
+        );
+      }
+
       return { attendees };
     },
 
@@ -144,7 +238,28 @@ export function createOrganiserEventsService(repository = createOrganiserEventsR
       }));
 
       const inserted = await repository.insertPhotos(rows);
-      return { photos: inserted.map((photo) => toPhotoResponse(photo, { created_at: photo.created_at })) };
+      const processing = await photoMatchingService.processPhotosByIds(
+        inserted.map((photo) => photo.id),
+      );
+      const processingByPhotoId = new Map(
+        processing.map((result) => [result.photo_id, result]),
+      );
+
+      const normalizedPhotos = await Promise.all(
+        inserted.map(async (photo) =>
+          toPhotoResponse(photo, {
+            created_at: photo.created_at,
+            image_url: await resolvePhotoUrl(repository, photo),
+            face_processing_status:
+              processingByPhotoId.get(photo.id)?.status || photo.face_processing_status || "pending",
+          }),
+        ),
+      );
+
+      return {
+        photos: normalizedPhotos,
+        face_processing: processing,
+      };
     },
 
     async removePhotos({ user, eventId, photoIds }) {
@@ -158,9 +273,18 @@ export function createOrganiserEventsService(repository = createOrganiserEventsR
       const validPhotoIds = photoIds.filter((id) => eventPhotoIds.has(id));
 
       const removed = await repository.deletePhotosByIds(validPhotoIds);
+      const normalizedPhotos = await Promise.all(
+        removed.map(async (photo) =>
+          toPhotoResponse(photo, {
+            created_at: photo.created_at,
+            image_url: await resolvePhotoUrl(repository, photo),
+          }),
+        ),
+      );
+
       return {
         deleted_count: removed.length,
-        photos: removed.map((photo) => toPhotoResponse(photo, { created_at: photo.created_at })),
+        photos: normalizedPhotos,
       };
     },
 
@@ -183,6 +307,25 @@ export function createOrganiserEventsService(repository = createOrganiserEventsR
           ...normalizeEvent(event),
           photos_count: photosByEventId.get(event.id)?.length || 0,
         })),
+      };
+    },
+
+    async reprocessPhotos({ user, eventId, photoIds }) {
+      const event = await repository.getEventById(eventId);
+      if (!event || event.organiser_user_id !== user.id) {
+        throw new ApiError(404, "EVENT_NOT_FOUND", "Event not found");
+      }
+
+      const results = await photoMatchingService.reprocessEventPhotos({
+        eventId,
+        photoIds,
+      });
+
+      return {
+        results,
+        total: results.length,
+        processed: results.filter((result) => result.status === "processed").length,
+        failed: results.filter((result) => result.status === "failed").length,
       };
     },
   };

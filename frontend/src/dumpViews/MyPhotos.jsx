@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Download,
   CheckCircle2,
@@ -16,6 +16,9 @@ import {
   CalendarPlus,
   Bell,
 } from "lucide-react";
+import { apiRequest } from "../lib/api.js";
+import { supabase } from "../lib/supabase.js";
+import { DEFAULT_AVATAR_PLACEHOLDER } from "../lib/avatarPlaceholder.js";
 
 // Inlined NavBar component for the preview environment
 const NavBar = ({ activePage }) => {
@@ -92,81 +95,129 @@ const NavBar = ({ activePage }) => {
 };
 
 const App = () => {
-  const [searchQuery, setSearchQuery] = useState("");
   const [peopleSearch, setPeopleSearch] = useState("");
   const [activeEventIds, setActiveEventIds] = useState(["all"]);
-  const [checkedPeopleIds, setCheckedPeopleIds] = useState(["me"]);
+  const [checkedPeopleIds, setCheckedPeopleIds] = useState([]);
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedPhotoIds, setSelectedPhotoIds] = useState([]);
+  const [photosApi, setPhotosApi] = useState([]);
+  const [eventsApi, setEventsApi] = useState([]);
+  const [peopleApi, setPeopleApi] = useState([]);
+  const [viewerUserId, setViewerUserId] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  // Mock Attendees/People Data
-  const allPeople = [
-    {
-      id: "me",
-      name: "Me (Alex)",
-      avatar: "https://picsum.photos/seed/selfie3/200/200",
-      eventIds: ["e1", "e2", "e3"],
-    },
-    {
-      id: "p1",
-      name: "Sarah Jenkins",
-      avatar: "https://i.pravatar.cc/150?u=sarah",
-      eventIds: ["e1", "e2"],
-    },
-    {
-      id: "p2",
-      name: "David Chen",
-      avatar: "https://i.pravatar.cc/150?u=david",
-      eventIds: ["e1", "e3"],
-    },
-    {
-      id: "p3",
-      name: "Emily Rodriguez",
-      avatar: "https://i.pravatar.cc/150?u=emily",
-      eventIds: ["e2"],
-    },
-    {
-      id: "p4",
-      name: "Michael Chang",
-      avatar: "https://i.pravatar.cc/150?u=michael",
-      eventIds: ["e3"],
-    },
-  ];
+  const loadMyPhotos = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        setPhotosApi([]);
+        setEventsApi([]);
+        setPeopleApi([]);
+        setViewerUserId("");
+        setCheckedPeopleIds([]);
+        return;
+      }
 
-  // Mock Events Data
-  const myEvents = [
-    { id: "all", name: "All Photos", count: 42 },
-    { id: "e1", name: "TechNova Summit '26", count: 12 },
-    { id: "e2", name: "Neon Nights Music Festival", count: 8 },
-    { id: "e3", name: "City Marathon 2026", count: 22 },
-  ];
+      setViewerUserId(session.user.id);
 
-  // Dummy Photos with relationships
-  const matchedPhotos = useMemo(
-    () =>
-      Array.from({ length: 42 }).map((_, i) => {
-        let eventId = "e1";
-        let peopleInPhoto = ["me"];
-        if (i > 11 && i <= 19) {
-          eventId = "e2";
-          if (i % 2 === 0) peopleInPhoto.push("p1", "p3");
-        } else if (i > 19) {
-          eventId = "e3";
-          if (i % 3 === 0) peopleInPhoto.push("p2", "p4");
-        } else {
-          if (i % 2 === 0) peopleInPhoto.push("p1", "p2");
+      const data = await apiRequest("/my-photos", {
+        token: session.access_token,
+      });
+
+      const nextPhotos = data?.photos || [];
+      const nextEvents = data?.events || [];
+      const nextPeople = data?.people || [];
+
+      setPhotosApi(nextPhotos);
+      setEventsApi(nextEvents);
+      setPeopleApi(nextPeople);
+
+      const hasViewer = nextPeople.some((person) => person.id === session.user.id);
+      setCheckedPeopleIds(hasViewer ? [session.user.id] : ["all"]);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+      setPhotosApi([]);
+      setEventsApi([]);
+      setPeopleApi([]);
+      setCheckedPeopleIds([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMyPhotos();
+  }, [loadMyPhotos]);
+
+  const matchedPhotos = useMemo(() => {
+    return photosApi.map((photo, index) => ({
+      id: photo.id,
+      eventId: photo.event_id,
+      people: photo.people || [],
+      url:
+        photo.image_url ||
+        `https://images.unsplash.com/photo-1515187029135-18ee286d815b?auto=format&fit=crop&q=80&w=${620 + (index % 5) * 20}`,
+    }));
+  }, [photosApi]);
+
+  const eventIdsByPerson = useMemo(() => {
+    const map = new Map();
+    matchedPhotos.forEach((photo) => {
+      (photo.people || []).forEach((personId) => {
+        if (!map.has(personId)) {
+          map.set(personId, new Set());
         }
+        map.get(personId).add(photo.eventId);
+      });
+    });
+    return map;
+  }, [matchedPhotos]);
 
-        const heights = [300, 400, 500, 250, 450];
-        return {
-          id: i,
-          eventId,
-          people: peopleInPhoto,
-          url: `https://picsum.photos/seed/flashfound${i + 200}/400/${heights[i % heights.length]}`,
-        };
-      }),
-    [],
-  );
+  const allPeople = useMemo(() => {
+    const peopleRows = peopleApi.map((person) => ({
+      id: person.id,
+      name: person.id === viewerUserId ? `Me (${person.name})` : person.name,
+      avatar: person.avatar_url || DEFAULT_AVATAR_PLACEHOLDER,
+      eventIds: [...(eventIdsByPerson.get(person.id) || new Set())],
+    }));
+
+    if (!viewerUserId || peopleRows.some((person) => person.id === viewerUserId)) {
+      return peopleRows;
+    }
+
+    return [
+      {
+        id: viewerUserId,
+        name: "Me",
+        avatar: DEFAULT_AVATAR_PLACEHOLDER,
+        eventIds: [],
+      },
+      ...peopleRows,
+    ];
+  }, [eventIdsByPerson, peopleApi, viewerUserId]);
+
+  const myEvents = useMemo(() => {
+    const counts = new Map();
+    matchedPhotos.forEach((photo) => {
+      counts.set(photo.eventId, (counts.get(photo.eventId) || 0) + 1);
+    });
+
+    const eventRows = eventsApi.map((event) => ({
+      id: event.id,
+      name: event.name,
+      count: counts.get(event.id) || 0,
+    }));
+
+    return [
+      { id: "all", name: "All Photos", count: matchedPhotos.length },
+      ...eventRows,
+    ];
+  }, [eventsApi, matchedPhotos]);
 
   // Filter People based on Event Context
   const contextualPeople = useMemo(() => {
@@ -174,7 +225,7 @@ const App = () => {
     return allPeople.filter((p) =>
       p.eventIds.some((id) => activeEventIds.includes(id)),
     );
-  }, [activeEventIds]);
+  }, [activeEventIds, allPeople]);
 
   // Filter Photos based on Event AND People
   const displayPhotos = useMemo(() => {
@@ -497,10 +548,24 @@ const App = () => {
 
             {/* Masonry Grid - Unified Card Selection */}
             <div className="flex-1 overflow-y-auto px-6 py-6 pb-24">
-              {displayPhotos.length > 0 ? (
+              {error ? (
+                <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {error}
+                </div>
+              ) : null}
+
+              {loading ? (
+                <div className="h-full flex items-center justify-center text-sm text-gray-500">
+                  Loading your photos...
+                </div>
+              ) : displayPhotos.length > 0 ? (
                 <div className="columns-2 sm:columns-3 xl:columns-4 gap-4 space-y-4">
                   {displayPhotos.map((photo) => {
                     const isSelected = selectedPhotoIds.includes(photo.id);
+                    const faceAvatars = (photo.people || [])
+                      .map((personId) => allPeople.find((person) => person.id === personId))
+                      .filter(Boolean);
+                    const previewAvatars = faceAvatars.slice(0, 3);
                     return (
                       <div
                         key={photo.id}
@@ -543,17 +608,19 @@ const App = () => {
                           <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-4">
                             <div className="flex gap-2 w-full justify-between items-center">
                               <div className="flex -space-x-2">
-                                {photo.people.map((pid) => (
+                                {previewAvatars.map((person) => (
                                   <img
-                                    key={pid}
-                                    src={
-                                      allPeople.find((p) => p.id === pid)
-                                        ?.avatar
-                                    }
+                                    key={person.id}
+                                    src={person.avatar}
                                     className="w-6 h-6 rounded-full border-2 border-white object-cover"
                                     alt="Person"
                                   />
                                 ))}
+                                {faceAvatars.length > 3 ? (
+                                  <div className="w-6 h-6 rounded-full border-2 border-white bg-white/90 text-[10px] font-bold text-gray-700 flex items-center justify-center">
+                                    +{faceAvatars.length - 3}
+                                  </div>
+                                ) : null}
                               </div>
                               <button className="p-2 bg-white rounded-full text-gray-900 shadow-lg hover:scale-110 transition-transform">
                                 <Download size={14} />

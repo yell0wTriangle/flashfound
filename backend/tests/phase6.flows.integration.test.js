@@ -26,7 +26,27 @@ describe("phase6 critical flows integration", () => {
         return state.profile;
       },
     };
-    const service = createProfileService(profileRepo);
+    const service = createProfileService(
+      profileRepo,
+      undefined,
+      undefined,
+      {
+        async createNotification() {
+          return {};
+        },
+        async listAddedToEventByRecipientAndEventIds() {
+          return [];
+        },
+      },
+      {
+        async getAccessibleEventIdsForUser() {
+          return [];
+        },
+        async getEventsByIds() {
+          return [];
+        },
+      },
+    );
 
     const bootstrap = await service.bootstrapProfile({
       id: "u1",

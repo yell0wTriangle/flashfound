@@ -28,6 +28,31 @@ function isEventAccessible(eventId, accessibleEventIds) {
   return accessibleEventIds.includes(eventId);
 }
 
+function isPhotoVisibleToAttendees(photo) {
+  if (!photo) return false;
+  if (!Object.prototype.hasOwnProperty.call(photo, "face_processing_status")) {
+    return true;
+  }
+  if (photo.face_processing_status == null) {
+    return true;
+  }
+  return photo.face_processing_status === "processed" && !photo.face_processing_error;
+}
+
+async function resolvePhotoUrl(repository, photo) {
+  if (photo.image_url) {
+    return photo.image_url;
+  }
+  if (!repository?.createSignedPhotoUrl) {
+    return null;
+  }
+  try {
+    return await repository.createSignedPhotoUrl(photo.storage_path, 60 * 30);
+  } catch {
+    return null;
+  }
+}
+
 async function getAccessiblePeopleForPrivateEvent({ repository, eventId, userId }) {
   const grantedTargets = await repository.getPrivateAccessGrantedTargets({
     eventId,
@@ -74,7 +99,8 @@ export function createEventsService(repository = createEventsRepository()) {
       }
 
       const photos = await repository.getPhotosByEventId(eventId);
-      const photoIds = photos.map((photo) => photo.id);
+      const visiblePhotos = photos.filter(isPhotoVisibleToAttendees);
+      const photoIds = visiblePhotos.map((photo) => photo.id);
       const photoPeople = await repository.getPhotoPeopleByPhotoIds(photoIds);
       const personIds = unique(photoPeople.map((entry) => entry.person_user_id).filter(Boolean));
       const profiles = await repository.getProfilesByIds(personIds);
@@ -123,7 +149,8 @@ export function createEventsService(repository = createEventsRepository()) {
       }
 
       const photos = await repository.getPhotosByEventId(eventId);
-      const photoIds = photos.map((photo) => photo.id);
+      const visiblePhotos = photos.filter(isPhotoVisibleToAttendees);
+      const photoIds = visiblePhotos.map((photo) => photo.id);
       const photoPeople = await repository.getPhotoPeopleByPhotoIds(photoIds);
       const byPhotoId = new Map();
       photoPeople.forEach((entry) => {
@@ -146,7 +173,7 @@ export function createEventsService(repository = createEventsRepository()) {
       const effectiveSelected =
         selectedPersonIds.length > 0 ? selectedPersonIds.filter((id) => baseAllowedPeople.includes(id)) : [];
 
-      const filteredPhotos = photos.filter((photo) => {
+      const filteredPhotos = visiblePhotos.filter((photo) => {
         const peopleInPhoto = byPhotoId.get(photo.id) || [];
         if (!effectiveSelected.length) {
           if (event.privacy_type === "public") return true;
@@ -166,15 +193,20 @@ export function createEventsService(repository = createEventsRepository()) {
         accessible: event.privacy_type === "public" ? true : baseAllowedPeople.includes(personId),
       }));
 
+      const resolvedPhotos = await Promise.all(
+        filteredPhotos.map(async (photo) =>
+          toPhotoResponse(photo, {
+            people: byPhotoId.get(photo.id) || [],
+            created_at: photo.created_at,
+            image_url: await resolvePhotoUrl(repository, photo),
+          }),
+        ),
+      );
+
       return {
         event: mapEventCard(event),
         people,
-        photos: filteredPhotos.map((photo) =>
-          toPhotoResponse(photo, {
-          people: byPhotoId.get(photo.id) || [],
-          created_at: photo.created_at,
-          }),
-        ),
+        photos: resolvedPhotos,
       };
     },
 
@@ -188,6 +220,7 @@ export function createEventsService(repository = createEventsRepository()) {
 
       const accessiblePhotoIds = rows
         .filter((row) => eventIds.includes(row.event_id))
+        .filter((row) => isPhotoVisibleToAttendees(row))
         .map((row) => row.id);
 
       return {

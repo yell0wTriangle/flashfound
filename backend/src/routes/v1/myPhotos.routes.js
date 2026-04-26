@@ -17,7 +17,7 @@ const listMyPhotosQuerySchema = z.object({
 
 export function createMyPhotosRoutes(service = createMyPhotosService()) {
   const router = Router();
-  router.use(auth, onboardingRequired);
+  router.use("/my-photos", auth, onboardingRequired);
 
   router.post("/my-photos", async (req, res, next) => {
     try {

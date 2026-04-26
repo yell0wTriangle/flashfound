@@ -9,6 +9,7 @@ function createMockRepo(overrides = {}) {
     getEventById: vi.fn(),
     updateEvent: vi.fn(),
     upsertAttendees: vi.fn(),
+    getAttendeesByEventId: vi.fn().mockResolvedValue([]),
     deleteAttendeeById: vi.fn(),
     getAttendeeById: vi.fn(),
     getProfilesByEmails: vi.fn(),
@@ -81,7 +82,17 @@ describe("organiser events service", () => {
       getProfilesByEmails: vi.fn().mockResolvedValue([{ id: "u2", email: "x@example.com" }]),
       upsertAttendees: vi.fn().mockResolvedValue([{ id: "a1", email: "x@example.com", user_id: "u2" }]),
     });
-    const service = createOrganiserEventsService(repo);
+    const photoMatchingService = {
+      reprocessEventPhotos: vi.fn().mockResolvedValue([]),
+    };
+    const notificationsRepository = {
+      createNotification: vi.fn().mockResolvedValue({}),
+    };
+    const service = createOrganiserEventsService(
+      repo,
+      photoMatchingService,
+      notificationsRepository,
+    );
     const result = await service.addAttendees({
       user: { id: "u1" },
       eventId: "e1",
@@ -92,6 +103,17 @@ describe("organiser events service", () => {
     expect(repo.upsertAttendees).toHaveBeenCalledWith([
       { event_id: "e1", email: "x@example.com", user_id: "u2" },
     ]);
+    expect(photoMatchingService.reprocessEventPhotos).toHaveBeenCalledWith({
+      eventId: "e1",
+      photoIds: [],
+    });
+    expect(notificationsRepository.createNotification).toHaveBeenCalledWith({
+      recipient_user_id: "u2",
+      type: "added_to_event",
+      title: "Added to Event",
+      message: "You were added to an event",
+      event_id: "e1",
+    });
   });
 
   it("supports bulk photo delete by event ownership", async () => {
@@ -113,4 +135,3 @@ describe("organiser events service", () => {
     expect(result.deleted_count).toBe(2);
   });
 });
-

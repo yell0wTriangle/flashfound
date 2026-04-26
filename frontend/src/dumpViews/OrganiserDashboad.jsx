@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Camera,
   Menu,
@@ -18,6 +19,8 @@ import {
   MoreVertical,
   Settings,
 } from "lucide-react";
+import { apiRequest } from "../lib/api.js";
+import { supabase } from "../lib/supabase.js";
 
 // Inlined NavBar component for the preview environment
 const NavBar = ({ activePage }) => {
@@ -94,53 +97,80 @@ const NavBar = ({ activePage }) => {
 };
 
 const App = () => {
+  const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState("");
+  const [managedEvents, setManagedEvents] = useState([]);
+  const [totals, setTotals] = useState({ events: 0, photos: 0 });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  // Dummy data for events managed by the organizer
-  const managedEvents = [
-    {
-      id: 1,
-      name: "TechNova Summit '26",
-      company: "TechNova Inc.",
-      date: "Oct 12, 2026",
-      location: "San Francisco, CA",
-      type: "Private",
-      status: "Upcoming",
-      attendeesCount: 145,
-      photosCount: 0,
-      imageUrl:
-        "https://images.unsplash.com/photo-1540575467063-178a50c2df87?auto=format&fit=crop&q=80&w=600",
-    },
-    {
-      id: 2,
-      name: "Global Founders Conference",
-      company: "TechNova Inc.",
-      date: "Nov 18, 2026",
-      location: "London, UK",
-      type: "Private",
-      status: "Draft",
-      attendeesCount: 42,
-      photosCount: 0,
-      imageUrl:
-        "https://images.unsplash.com/photo-1515187029135-18ee286d815b?auto=format&fit=crop&q=80&w=600",
-    },
-    {
-      id: 3,
-      name: "Annual Leadership Retreat",
-      company: "TechNova Inc.",
-      date: "Aug 05, 2026",
-      location: "Palm Springs, CA",
-      type: "Private",
-      status: "Completed",
-      attendeesCount: 88,
-      photosCount: 1240,
-      imageUrl:
-        "https://images.unsplash.com/photo-1517457373958-b7bdd4587205?auto=format&fit=crop&q=80&w=600",
-    },
-  ];
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session?.access_token) {
+          if (cancelled) return;
+          setManagedEvents([]);
+          setTotals({ events: 0, photos: 0 });
+          return;
+        }
 
-  const filteredEvents = managedEvents.filter((event) =>
-    event.name.toLowerCase().includes(searchQuery.toLowerCase()),
+        const data = await apiRequest("/organiser/dashboard", {
+          token: session.access_token,
+        });
+        if (cancelled) return;
+        const mappedEvents = (data?.events || []).map((event, index) => ({
+          id: event.id,
+          name: event.name || "Untitled Event",
+          company: event.organizing_company || event.organiser_name || "Organizer",
+          date: event.date || "",
+          location: event.location || "",
+          type: event.type === "private" ? "Private" : "Public",
+          status: event.status ? `${event.status[0].toUpperCase()}${event.status.slice(1)}` : "Draft",
+          attendeesCount: 0,
+          photosCount: event.photos_count || 0,
+          imageUrl:
+            event.image_url ||
+            `https://images.unsplash.com/photo-1515187029135-18ee286d815b?auto=format&fit=crop&q=80&w=${620 + (index % 4) * 60}`,
+        }));
+        setManagedEvents(mappedEvents);
+        setTotals({
+          events: data?.totals?.events || mappedEvents.length,
+          photos: data?.totals?.photos || mappedEvents.reduce((sum, event) => sum + event.photosCount, 0),
+        });
+      } catch (requestError) {
+        if (cancelled) return;
+        const message = requestError instanceof Error ? requestError.message : String(requestError);
+        if (message.toLowerCase().includes("organiser access required")) {
+          navigate("/organiser/request", { replace: true });
+          return;
+        }
+        setError(message);
+        setManagedEvents([]);
+        setTotals({ events: 0, photos: 0 });
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const filteredEvents = useMemo(
+    () =>
+      managedEvents.filter((event) =>
+        event.name.toLowerCase().includes(searchQuery.toLowerCase()),
+      ),
+    [managedEvents, searchQuery],
   );
 
   return (
@@ -180,7 +210,7 @@ const App = () => {
               {/* Dummy Add Event Button */}
               <button
                 className="flex items-center justify-center gap-2 px-6 py-3 bg-[#2563eb] text-white rounded-xl font-semibold shadow-md hover:bg-blue-700 hover:shadow-lg active:scale-95 transition-all w-full sm:w-auto"
-                onClick={() => alert("Navigate to 'Create New Event' flow")}
+                onClick={() => navigate("/organiser/events/new")}
               >
                 <Plus size={20} />
                 Create Event
@@ -202,7 +232,7 @@ const App = () => {
                       Events
                     </p>
                     <p className="text-xl font-bold text-gray-900">
-                      {managedEvents.length}
+                      {totals.events}
                     </p>
                   </div>
                 </div>
@@ -214,7 +244,7 @@ const App = () => {
                     <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">
                       Photos
                     </p>
-                    <p className="text-xl font-bold text-gray-900">1,240</p>
+                    <p className="text-xl font-bold text-gray-900">{totals.photos}</p>
                   </div>
                 </div>
               </div>
@@ -235,6 +265,15 @@ const App = () => {
             </div>
 
             {/* Events Grid */}
+            {error ? (
+              <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {error}
+              </div>
+            ) : null}
+
+            {loading ? (
+              <div className="py-16 text-center text-sm text-gray-500">Loading organiser dashboard...</div>
+            ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pb-12">
               {filteredEvents.map((event) => (
                 <div
@@ -326,7 +365,10 @@ const App = () => {
                     </div>
 
                     {/* Primary Action */}
-                    <button className="w-full mt-3 py-2.5 bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2">
+                    <button
+                      onClick={() => navigate(`/organiser/events/${event.id}/edit`)}
+                      className="w-full mt-3 py-2.5 bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+                    >
                       <Settings size={16} /> Manage Event
                     </button>
                   </div>
@@ -346,6 +388,7 @@ const App = () => {
                 </div>
               )}
             </div>
+            )}
           </div>
         </div>
       </div>

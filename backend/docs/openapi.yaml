@@ -1,0 +1,479 @@
+openapi: 3.0.3
+info:
+  title: FlashFound API
+  version: 0.1.0
+  description: >
+    FlashFound backend API for auth bootstrap, onboarding verification, attendee galleries,
+    private access, organizer workflows, and admin organizer approvals.
+servers:
+  - url: http://127.0.0.1:8080/api/v1
+tags:
+  - name: Profile
+  - name: Verification
+  - name: Events
+  - name: MyPhotos
+  - name: Notifications
+  - name: PrivateAccess
+  - name: OrganiserAccess
+  - name: OrganiserEvents
+  - name: Admin
+security:
+  - bearerAuth: []
+paths:
+  /profile/bootstrap:
+    post:
+      tags: [Profile]
+      summary: Create profile row if missing
+      responses:
+        '200':
+          description: Profile bootstrap result
+  /profile/me:
+    get:
+      tags: [Profile]
+      summary: Get current profile
+      responses:
+        '200':
+          description: Profile
+    patch:
+      tags: [Profile]
+      summary: Update profile display fields
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name:
+                  type: string
+                display_avatar_url:
+                  type: string
+                  nullable: true
+      responses:
+        '200':
+          description: Updated profile
+  /profile/onboarding-status:
+    get:
+      tags: [Profile]
+      summary: Get onboarding and role status
+      responses:
+        '200':
+          description: Onboarding status
+
+  /verification/session/start:
+    post:
+      tags: [Verification]
+      summary: Start new verification session
+      responses:
+        '200':
+          description: Session started
+  /verification/session/{id}:
+    get:
+      tags: [Verification]
+      summary: Get verification session
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Session
+  /verification/session/{id}/submit:
+    post:
+      tags: [Verification]
+      summary: Submit selfie URL for verification
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [selfie_url]
+              properties:
+                selfie_url:
+                  type: string
+                  format: uri
+      responses:
+        '200':
+          description: Verification attempt result
+  /verification/session/{id}/finalize:
+    post:
+      tags: [Verification]
+      summary: Finalize successful verification and mark onboarding complete
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Finalized
+
+  /events/discovery:
+    get:
+      tags: [Events]
+      summary: List attendee-accessible events
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+        - in: query
+          name: privacy
+          schema:
+            type: string
+            enum: [all, public, private]
+      responses:
+        '200':
+          description: Event cards
+  /events/{eventId}/people:
+    get:
+      tags: [Events]
+      summary: List people visible in an event context
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Event and people list
+  /events/{eventId}/results:
+    get:
+      tags: [Events]
+      summary: Event photos filtered by person ids
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: person_ids
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Event, people, and photos
+
+  /my-photos:
+    get:
+      tags: [MyPhotos]
+      summary: List current user's saved photos
+      parameters:
+        - in: query
+          name: event_ids
+          schema:
+            type: string
+        - in: query
+          name: person_ids
+          schema:
+            type: string
+      responses:
+        '200':
+          description: My photos dataset
+    post:
+      tags: [MyPhotos]
+      summary: Add selected photo ids to My Photos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [photo_ids]
+              properties:
+                photo_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+      responses:
+        '200':
+          description: Add result
+
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: List notifications
+      responses:
+        '200':
+          description: Notification list
+  /notifications/{id}/read:
+    post:
+      tags: [Notifications]
+      summary: Mark notification read
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Marked read
+  /notifications/read-all:
+    post:
+      tags: [Notifications]
+      summary: Mark all notifications read
+      responses:
+        '200':
+          description: Count marked read
+
+  /private-access/requests:
+    post:
+      tags: [PrivateAccess]
+      summary: Request access to another attendee in private event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [event_id, target_user_id]
+              properties:
+                event_id:
+                  type: string
+                  format: uuid
+                target_user_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Request created
+  /private-access/requests/{id}/approve:
+    post:
+      tags: [PrivateAccess]
+      summary: Approve private access request
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Request approved
+  /private-access/requests/{id}/deny:
+    post:
+      tags: [PrivateAccess]
+      summary: Deny private access request
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Request denied
+
+  /organiser-access/request:
+    post:
+      tags: [OrganiserAccess]
+      summary: Submit organiser access request
+      responses:
+        '200':
+          description: Request submitted
+
+  /organiser/dashboard:
+    get:
+      tags: [OrganiserEvents]
+      summary: Organizer dashboard totals and events
+      responses:
+        '200':
+          description: Dashboard payload
+  /organiser/events:
+    get:
+      tags: [OrganiserEvents]
+      summary: List organizer events
+      responses:
+        '200':
+          description: Event list
+    post:
+      tags: [OrganiserEvents]
+      summary: Create organizer event
+      responses:
+        '200':
+          description: Created event
+  /organiser/events/{eventId}:
+    get:
+      tags: [OrganiserEvents]
+      summary: Get single organizer event with attendees and photos
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Event editor payload
+    patch:
+      tags: [OrganiserEvents]
+      summary: Update organizer event
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Updated event
+  /organiser/events/{eventId}/attendees:
+    post:
+      tags: [OrganiserEvents]
+      summary: Add attendee emails to event
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Attendees upserted
+  /organiser/events/{eventId}/attendees/{attendeeId}:
+    delete:
+      tags: [OrganiserEvents]
+      summary: Remove attendee from event
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: path
+          name: attendeeId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Attendee removed
+  /organiser/events/{eventId}/photos:
+    post:
+      tags: [OrganiserEvents]
+      summary: Add photos metadata to event (after storage upload)
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Photos inserted and indexed
+    delete:
+      tags: [OrganiserEvents]
+      summary: Delete photos from event
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Photos deleted
+  /organiser/events/{eventId}/photos/reprocess:
+    post:
+      tags: [OrganiserEvents]
+      summary: Reprocess event photos for face indexing
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Reprocess summary
+
+  /admin/auth:
+    post:
+      tags: [Admin]
+      summary: Exchange admin access key for admin bearer token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [access_key]
+              properties:
+                access_key:
+                  type: string
+      responses:
+        '200':
+          description: Admin token
+  /admin/organiser-requests:
+    get:
+      tags: [Admin]
+      summary: List organizer requests (admin token required)
+      responses:
+        '200':
+          description: Requests
+  /admin/organiser-requests/{id}/approve:
+    post:
+      tags: [Admin]
+      summary: Approve organizer request (admin token required)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Approved
+  /admin/organiser-requests/{id}/deny:
+    post:
+      tags: [Admin]
+      summary: Deny organizer request (admin token required)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Denied
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
