@@ -1,0 +1,15 @@
+meta {
+  name: GET organiser requests
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/v1/admin/organiser-requests?status=pending
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{adminToken}}
+}

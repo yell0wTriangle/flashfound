@@ -1,0 +1,544 @@
+openapi: 3.1.0
+info:
+  title: FlashFound Backend API
+  version: 0.6.0
+  description: FlashFound backend API documented through Phase 6.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local development
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      security: []
+      summary: Liveness
+      responses:
+        "200":
+          description: Healthy
+  /ready:
+    get:
+      security: []
+      summary: Readiness
+      responses:
+        "200":
+          description: Ready
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/v1/health:
+    get:
+      security: []
+      summary: Versioned health
+      responses:
+        "200":
+          description: Healthy
+  /api/v1/profile/bootstrap:
+    post:
+      summary: Bootstrap profile
+      responses:
+        "200":
+          description: Bootstrapped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkEnvelope"
+  /api/v1/profile/me:
+    get:
+      summary: Get my profile
+      responses:
+        "200":
+          description: Profile
+    patch:
+      summary: Patch profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name:
+                  type: string
+                display_avatar_url:
+                  type: string
+                  format: uri
+                  nullable: true
+      responses:
+        "200":
+          description: Updated profile
+        "400":
+          $ref: "#/components/responses/Error"
+  /api/v1/profile/verification-selfie:
+    patch:
+      summary: Update verification selfie
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [verification_selfie_url]
+              properties:
+                verification_selfie_url:
+                  type: string
+                  format: uri
+                face_verification_completed:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated profile
+  /api/v1/profile/onboarding-status:
+    get:
+      summary: Onboarding status
+      responses:
+        "200":
+          description: Status
+  /api/v1/verification/session/start:
+    post:
+      summary: Start selfie verification session
+      responses:
+        "200":
+          description: Session started
+  /api/v1/verification/session/{id}:
+    get:
+      summary: Get verification session
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Session state
+  /api/v1/verification/session/{id}/submit:
+    post:
+      summary: Submit selfie URL for verification
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [selfie_url]
+              properties:
+                selfie_url:
+                  type: string
+                  format: uri
+      responses:
+        "200":
+          description: Submission result
+  /api/v1/verification/session/{id}/finalize:
+    post:
+      summary: Finalize verification session
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Profile verified
+  /api/v1/events/discovery:
+    get:
+      summary: Event discovery
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+        - in: query
+          name: privacy
+          schema:
+            type: string
+            enum: [all, public, private]
+      responses:
+        "200":
+          description: Event list
+  /api/v1/events/{eventId}/people:
+    get:
+      summary: Event people
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+      responses:
+        "200":
+          description: Event people
+        "400":
+          $ref: "#/components/responses/Error"
+  /api/v1/events/{eventId}/results:
+    get:
+      summary: Event results
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+        - in: query
+          name: person_ids
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Results
+  /api/v1/my-photos:
+    get:
+      summary: List my photos
+      parameters:
+        - in: query
+          name: event_ids
+          schema:
+            type: string
+        - in: query
+          name: person_ids
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Photos
+    post:
+      summary: Add photos to my photos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [photo_ids]
+              properties:
+                photo_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+      responses:
+        "200":
+          description: Added
+  /api/v1/organiser-access/request:
+    post:
+      summary: Request organiser access
+      responses:
+        "200":
+          description: Pending request created
+  /api/v1/admin/auth:
+    post:
+      security: []
+      summary: Admin login by access key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [access_key]
+              properties:
+                access_key:
+                  type: string
+      responses:
+        "200":
+          description: Admin token
+        "429":
+          $ref: "#/components/responses/Error"
+  /api/v1/admin/organiser-requests:
+    get:
+      summary: Admin list organiser requests
+      security:
+        - adminBearer: []
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, approved, denied]
+      responses:
+        "200":
+          description: Requests
+  /api/v1/admin/organiser-requests/{id}/approve:
+    post:
+      summary: Admin approve organiser request
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Approved
+  /api/v1/admin/organiser-requests/{id}/deny:
+    post:
+      summary: Admin deny organiser request
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Denied
+  /api/v1/organiser/events:
+    get:
+      summary: List organiser events
+      responses:
+        "200":
+          description: Events
+    post:
+      summary: Create organiser event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EventWrite"
+      responses:
+        "200":
+          description: Created
+  /api/v1/organiser/events/{eventId}:
+    patch:
+      summary: Update organiser event
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EventWrite"
+      responses:
+        "200":
+          description: Updated
+  /api/v1/organiser/events/{eventId}/attendees:
+    post:
+      summary: Add attendees
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [emails]
+              properties:
+                emails:
+                  type: array
+                  items:
+                    type: string
+                    format: email
+      responses:
+        "200":
+          description: Upserted attendees
+  /api/v1/organiser/events/{eventId}/attendees/{attendeeId}:
+    delete:
+      summary: Remove attendee
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+        - $ref: "#/components/parameters/AttendeeId"
+      responses:
+        "200":
+          description: Removed
+  /api/v1/organiser/events/{eventId}/photos:
+    post:
+      summary: Add organiser photos
+      description: |
+        Storage contract:
+        - `storage_path` is required and points to Supabase Storage object path.
+        - `image_url` is optional; when present URL strategy is `public`, otherwise `signed_required`.
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [photos]
+              properties:
+                photos:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/PhotoUpload"
+      responses:
+        "200":
+          description: Added
+    delete:
+      summary: Remove organiser photos
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [photo_ids]
+              properties:
+                photo_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+      responses:
+        "200":
+          description: Removed
+  /api/v1/organiser/dashboard:
+    get:
+      summary: Organiser dashboard
+      responses:
+        "200":
+          description: Metrics and event cards
+  /api/v1/private-access/requests:
+    post:
+      summary: Create private access request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [event_id, target_user_id]
+              properties:
+                event_id:
+                  type: string
+                  format: uuid
+                target_user_id:
+                  type: string
+                  format: uuid
+      responses:
+        "200":
+          description: Request created
+        "429":
+          $ref: "#/components/responses/Error"
+  /api/v1/private-access/requests/{id}/approve:
+    post:
+      summary: Approve private access request
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Approved
+  /api/v1/private-access/requests/{id}/deny:
+    post:
+      summary: Deny private access request
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Denied
+  /api/v1/notifications:
+    get:
+      summary: Notifications feed
+      responses:
+        "200":
+          description: Notifications
+  /api/v1/notifications/{id}/read:
+    post:
+      summary: Mark one notification as read
+      parameters:
+        - $ref: "#/components/parameters/NotificationId"
+      responses:
+        "200":
+          description: Updated
+  /api/v1/notifications/read-all:
+    post:
+      summary: Mark all notifications as read
+      responses:
+        "200":
+          description: Updated
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    adminBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: FlashFoundAdminToken
+  parameters:
+    EventId:
+      in: path
+      name: eventId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AttendeeId:
+      in: path
+      name: attendeeId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RequestId:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    NotificationId:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    Error:
+      description: Structured error envelope
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    OkEnvelope:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          const: true
+        data:
+          type: object
+    ErrorEnvelope:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          const: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            requestId:
+              type: string
+            details:
+              nullable: true
+    EventWrite:
+      type: object
+      properties:
+        name:
+          type: string
+        date:
+          type: string
+          format: date
+        location:
+          type: string
+        organizing_company:
+          type: string
+          nullable: true
+        image_url:
+          type: string
+          format: uri
+          nullable: true
+        type:
+          type: string
+          enum: [public, private]
+        status:
+          type: string
+          enum: [draft, upcoming, completed]
+    PhotoUpload:
+      type: object
+      required: [storage_path]
+      properties:
+        storage_path:
+          type: string
+        image_url:
+          type: string
+          format: uri
+          nullable: true

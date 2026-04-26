@@ -1,0 +1,15 @@
+meta {
+  name: POST profile bootstrap
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/profile/bootstrap
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{userToken}}
+}

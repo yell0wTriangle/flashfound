@@ -1,0 +1,15 @@
+meta {
+  name: POST notifications read-all
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/v1/notifications/read-all
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{targetToken}}
+}

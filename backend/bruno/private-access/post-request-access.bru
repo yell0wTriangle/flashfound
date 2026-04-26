@@ -1,0 +1,22 @@
+meta {
+  name: POST private access request
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/private-access/requests
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{requesterToken}}
+}
+
+body:json {
+  {
+    "event_id": "{{eventId}}",
+    "target_user_id": "{{targetUserId}}"
+  }
+}
