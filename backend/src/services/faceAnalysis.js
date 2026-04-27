@@ -1,11 +1,16 @@
-import * as faceDetection from "@tensorflow-models/face-detection";
-import * as tf from "@tensorflow/tfjs";
-import "@tensorflow/tfjs-backend-cpu";
+import { createRequire } from "node:module";
+import path from "node:path";
 import util from "node:util";
 import sharp from "sharp";
 import { env } from "../config/env.js";
 
-let detectorPromise;
+const require = createRequire(import.meta.url);
+const FACE_API_MODEL_DIR = path.join(
+  path.dirname(require.resolve("@vladmandic/face-api/package.json")),
+  "model",
+);
+
+let faceApiModelsPromise;
 
 function makeCodedError(code, message) {
   const error = new Error(message);
@@ -13,15 +18,21 @@ function makeCodedError(code, message) {
   return error;
 }
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
 function resolveDetectionBox(detection) {
   const box = detection?.box;
   if (!box) {
     return { x1: 0, y1: 0, x2: 0, y2: 0 };
   }
-  const x1 = Number(box.xMin || 0);
-  const y1 = Number(box.yMin || 0);
-  const width = Number(box.width || 0);
-  const height = Number(box.height || 0);
+
+  const x1 = Number(box.x ?? box.left ?? 0);
+  const y1 = Number(box.y ?? box.top ?? 0);
+  const width = Number(box.width ?? 0);
+  const height = Number(box.height ?? 0);
+
   return {
     x1,
     y1,
@@ -31,100 +42,79 @@ function resolveDetectionBox(detection) {
 }
 
 function resolveConfidence(detection) {
-  const score = Array.isArray(detection?.score) ? detection.score[0] : detection?.score;
+  const score = detection?.score;
   if (typeof score === "number" && Number.isFinite(score)) {
     return score;
   }
   return 1;
 }
 
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function normalizeEmbedding(values) {
-  const norm = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
-  if (!norm) {
-    return values.map(() => 0);
-  }
-  return values.map((value) => Number((value / norm).toFixed(6)));
-}
-
-function mapKeypoints(detection) {
-  if (!Array.isArray(detection?.keypoints)) {
+function mapKeypoints(landmarks) {
+  if (!Array.isArray(landmarks?.positions)) {
     return [];
   }
-  return detection.keypoints.map((point) => ({
+  return landmarks.positions.map((point) => ({
     x: Number(point.x || 0),
     y: Number(point.y || 0),
-    name: point.name || null,
+    name: null,
   }));
 }
 
-async function getFaceDetector() {
-  if (!detectorPromise) {
-    detectorPromise = (async () => {
-      if (typeof util.isNullOrUndefined !== "function") {
-        util.isNullOrUndefined = (value) => value === null || value === undefined;
-      }
-      await tf.setBackend("cpu");
-      await tf.ready();
-      const model = faceDetection.SupportedModels.MediaPipeFaceDetector;
-      return faceDetection.createDetector(model, {
-        runtime: "tfjs",
-        modelType: "short",
-        maxFaces: 20,
-      });
-    })();
+function normalizeDescriptor(descriptor) {
+  if (!descriptor || typeof descriptor.length !== "number") {
+    return null;
   }
-  return detectorPromise;
+  const values = Array.from(descriptor).map((value) => Number(Number(value).toFixed(6)));
+  if (!values.length || values.some((value) => !Number.isFinite(value))) {
+    return null;
+  }
+  return values;
 }
 
-async function createDecodedImage(arrayBuffer) {
-  const normalized = sharp(Buffer.from(arrayBuffer)).rotate().toColorspace("srgb").removeAlpha();
-  const { data, info } = await normalized.raw().toBuffer({ resolveWithObject: true });
-  if (!info.width || !info.height || !info.channels) {
+async function getFaceApiModels() {
+  if (!faceApiModelsPromise) {
+    faceApiModelsPromise = (async () => {
+      if (typeof util.isNullOrUndefined !== "function") {
+        util.isNullOrUndefined = (value) => value == null;
+      }
+
+      const faceapi = await import("@vladmandic/face-api");
+      await Promise.all([
+        faceapi.nets.ssdMobilenetv1.loadFromDisk(FACE_API_MODEL_DIR),
+        faceapi.nets.faceLandmark68Net.loadFromDisk(FACE_API_MODEL_DIR),
+        faceapi.nets.faceRecognitionNet.loadFromDisk(FACE_API_MODEL_DIR),
+      ]);
+
+      return {
+        faceapi,
+        detectorOptions: new faceapi.SsdMobilenetv1Options({
+          minConfidence: env.FACE_DESCRIPTOR_MIN_CONFIDENCE,
+          maxResults: 20,
+        }),
+      };
+    })();
+  }
+
+  return faceApiModelsPromise;
+}
+
+async function createNormalizedImage(arrayBuffer) {
+  const { data, info } = await sharp(Buffer.from(arrayBuffer))
+    .rotate()
+    .toColorspace("srgb")
+    .removeAlpha()
+    .jpeg({ quality: 94 })
+    .toBuffer({ resolveWithObject: true });
+
+  if (!info.width || !info.height) {
     throw makeCodedError("IMAGE_DECODE_FAILED", "Decoded image metadata unavailable");
   }
 
-  const encodedBuffer = await sharp(data, {
-    raw: {
-      width: info.width,
-      height: info.height,
-      channels: info.channels,
-    },
-  })
-    .jpeg({ quality: 94 })
-    .toBuffer();
-
   return {
-    tensor: tf.tensor3d(new Uint8Array(data), [info.height, info.width, info.channels], "int32"),
+    encodedBuffer: data,
     width: info.width,
     height: info.height,
-    encodedBuffer,
   };
-}
-
-async function extractFaceEmbedding({ encodedBuffer, width, height, box }) {
-  const left = clamp(Math.floor(box.x1), 0, Math.max(0, width - 1));
-  const top = clamp(Math.floor(box.y1), 0, Math.max(0, height - 1));
-  const faceWidth = clamp(Math.ceil(box.x2 - box.x1), 1, Math.max(1, width - left));
-  const faceHeight = clamp(Math.ceil(box.y2 - box.y1), 1, Math.max(1, height - top));
-
-  const extracted = await sharp(encodedBuffer)
-    .extract({
-      left,
-      top,
-      width: faceWidth,
-      height: faceHeight,
-    })
-    .resize(16, 16, { fit: "fill" })
-    .grayscale()
-    .raw()
-    .toBuffer();
-
-  const values = Array.from(extracted).map((value) => value / 255);
-  return normalizeEmbedding(values);
 }
 
 export async function analyzeFacesFromUrl({
@@ -168,7 +158,7 @@ export async function analyzeFacesFromUrl({
 
   let decoded;
   try {
-    decoded = await createDecodedImage(arrayBuffer);
+    decoded = await createNormalizedImage(arrayBuffer);
   } catch (error) {
     if (error?.code) throw error;
     throw makeCodedError(
@@ -177,36 +167,47 @@ export async function analyzeFacesFromUrl({
     );
   }
 
+  const { faceapi, detectorOptions } = await getFaceApiModels();
+  let tensor;
   let detections = [];
   try {
-    const detector = await getFaceDetector();
-    detections = await detector.estimateFaces(decoded.tensor);
+    tensor = faceapi.tf.node.decodeImage(decoded.encodedBuffer, 3);
+    detections = await faceapi
+      .detectAllFaces(tensor, detectorOptions)
+      .withFaceLandmarks()
+      .withFaceDescriptors();
   } catch (error) {
     throw makeCodedError(
-      "MEDIAPIPE_DETECTOR_FAILED",
-      error instanceof Error ? error.message : "Face detector failed",
+      "FACE_DESCRIPTOR_FAILED",
+      error instanceof Error ? error.message : "Face descriptor model failed",
     );
   } finally {
-    decoded.tensor.dispose();
+    if (tensor) {
+      faceapi.tf.dispose(tensor);
+    }
   }
 
   const faces = [];
   for (let index = 0; index < detections.length; index += 1) {
-    const detection = detections[index];
-    const box = resolveDetectionBox(detection);
-    const embedding = await extractFaceEmbedding({
-      encodedBuffer: decoded.encodedBuffer,
-      width: decoded.width,
-      height: decoded.height,
-      box,
-    });
+    const result = detections[index];
+    const box = resolveDetectionBox(result.detection);
+    const embedding = normalizeDescriptor(result.descriptor);
+    if (!embedding) {
+      continue;
+    }
 
     faces.push({
       face_index: index,
-      box,
-      confidence: resolveConfidence(detection),
-      keypoints: mapKeypoints(detection),
+      box: {
+        x1: clamp(box.x1, 0, decoded.width),
+        y1: clamp(box.y1, 0, decoded.height),
+        x2: clamp(box.x2, 0, decoded.width),
+        y2: clamp(box.y2, 0, decoded.height),
+      },
+      confidence: resolveConfidence(result.detection),
+      keypoints: mapKeypoints(result.landmarks),
       embedding,
+      embedding_model: "face-api-ssd-128d",
     });
   }
 
@@ -217,25 +218,25 @@ export async function analyzeFacesFromUrl({
   };
 }
 
-export function cosineSimilarity(embeddingA, embeddingB) {
+export function euclideanDistance(embeddingA, embeddingB) {
   if (!Array.isArray(embeddingA) || !Array.isArray(embeddingB)) {
-    return 0;
+    return Number.POSITIVE_INFINITY;
   }
 
-  const length = Math.min(embeddingA.length, embeddingB.length);
-  if (!length) return 0;
-
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let index = 0; index < length; index += 1) {
-    const a = Number(embeddingA[index] || 0);
-    const b = Number(embeddingB[index] || 0);
-    dot += a * b;
-    normA += a * a;
-    normB += b * b;
+  if (embeddingA.length !== embeddingB.length || !embeddingA.length) {
+    return Number.POSITIVE_INFINITY;
   }
 
-  if (!normA || !normB) return 0;
-  return Number((dot / (Math.sqrt(normA) * Math.sqrt(normB))).toFixed(6));
+  let sum = 0;
+  for (let index = 0; index < embeddingA.length; index += 1) {
+    const a = Number(embeddingA[index]);
+    const b = Number(embeddingB[index]);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) {
+      return Number.POSITIVE_INFINITY;
+    }
+    const diff = a - b;
+    sum += diff * diff;
+  }
+
+  return Number(Math.sqrt(sum).toFixed(6));
 }

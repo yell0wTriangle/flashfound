@@ -23,7 +23,13 @@ function createService(repo, overrides = {}) {
     getEventsByIds: vi.fn().mockResolvedValue([]),
     ...(overrides.eventsRepository || {}),
   };
-  return createProfileService(repo, undefined, undefined, notificationsRepository, eventsRepository);
+  return createProfileService(
+    repo,
+    undefined,
+    overrides.photoMatchingService,
+    notificationsRepository,
+    eventsRepository,
+  );
 }
 
 describe("profile service", () => {
@@ -72,6 +78,33 @@ describe("profile service", () => {
       userId: "u1",
       email: "user@example.com",
     });
+  });
+
+  it("waits for verified profile rematch during bootstrap", async () => {
+    const repo = createMockRepo();
+    repo.findById.mockResolvedValue({
+      id: "u1",
+      email: "user@example.com",
+      face_verification_completed: true,
+      role: "attendee",
+    });
+    let rematchFinished = false;
+    const photoMatchingService = {
+      rematchUserAcrossAccessiblePhotos: vi.fn(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        rematchFinished = true;
+        return { rematched_photos: 1, matched_photos: 1 };
+      }),
+    };
+    const service = createService(repo, { photoMatchingService });
+
+    await service.bootstrapProfile({ id: "u1", email: "user@example.com" });
+
+    expect(photoMatchingService.rematchUserAcrossAccessiblePhotos).toHaveBeenCalledWith({
+      userId: "u1",
+      email: "user@example.com",
+    });
+    expect(rematchFinished).toBe(true);
   });
 
   it("maps onboarding status correctly", async () => {

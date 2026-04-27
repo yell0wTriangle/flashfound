@@ -37,7 +37,7 @@ export function createProfileService(
   eventsRepository = createEventsRepository(),
 ) {
   const bootstrapInFlight = new Map();
-  const rematchInFlight = new Set();
+  const rematchInFlight = new Map();
 
   const linkAttendeeRows = async ({ userId, email }) => {
     if (typeof repository.linkAttendeeRowsToUserByEmail !== "function") {
@@ -133,11 +133,10 @@ export function createProfileService(
         }
 
         if (rematchInFlight.has(authUser.id)) {
-          return;
+          return rematchInFlight.get(authUser.id);
         }
-        rematchInFlight.add(authUser.id);
 
-        photoMatchingService
+        const rematchPromise = photoMatchingService
           .rematchUserAcrossAccessiblePhotos({
             userId: authUser.id,
             email: authUser.email || profile.email || "",
@@ -154,6 +153,8 @@ export function createProfileService(
           .finally(() => {
             rematchInFlight.delete(authUser.id);
           });
+        rematchInFlight.set(authUser.id, rematchPromise);
+        return rematchPromise;
       };
 
       const existing = await repository.findById(authUser.id);
@@ -164,7 +165,7 @@ export function createProfileService(
         });
         await maybeNotifyLinkedAttendeeRows(linkedRows);
         await ensureAddedToEventNotifications();
-        maybeRematch({ profile: existing });
+        await maybeRematch({ profile: existing });
         return {
           profile: existing,
           created: false,
@@ -187,7 +188,7 @@ export function createProfileService(
       });
       await maybeNotifyLinkedAttendeeRows(linkedRows);
       await ensureAddedToEventNotifications();
-      maybeRematch({ profile: createdProfile });
+      await maybeRematch({ profile: createdProfile });
       return {
         profile: createdProfile,
         created: true,

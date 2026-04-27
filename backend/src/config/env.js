@@ -21,8 +21,10 @@ const envSchema = z.object({
   FACE_INDEX_FETCH_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(15000),
   FACE_INDEX_MAX_IMAGE_BYTES: z.coerce.number().int().min(1024).default(10 * 1024 * 1024),
   FACE_INDEX_MIN_FACE_RATIO: z.coerce.number().min(0.001).max(0.9).default(0.015),
-  FACE_MATCH_THRESHOLD: z.coerce.number().min(0).max(1).default(0.9),
-  FACE_MATCH_MIN_MARGIN: z.coerce.number().min(0).max(1).default(0.04),
+  FACE_DESCRIPTOR_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.1),
+  FACE_MATCH_MAX_DISTANCE: z.coerce.number().min(0).max(2).default(0.55),
+  FACE_MATCH_MIN_DISTANCE_MARGIN: z.coerce.number().min(0).max(2).default(0.05),
+  FACE_MATCH_SINGLE_CANDIDATE_MAX_DISTANCE: z.coerce.number().min(0).max(2).default(0.5),
   EVENT_PHOTOS_BUCKET: z.string().min(1).default("event-photos"),
   MEDIAPIPE_FACE_DETECTOR_MODEL_URL: z
     .string()

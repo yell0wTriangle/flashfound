@@ -42,6 +42,7 @@ Frontend runs on `http://127.0.0.1:5173`.
 
 - Configure Supabase project keys in `backend/.env` and `frontend/.env`.
 - Ensure CORS origin matches frontend URL.
-- For private event matching, keep strict face settings in backend env:
-  - `FACE_MATCH_THRESHOLD=0.9`
-  - `FACE_MATCH_MIN_MARGIN=0.04`
+- Private event matching uses 128D face descriptors:
+  - `FACE_MATCH_MAX_DISTANCE=0.55`
+  - `FACE_MATCH_MIN_DISTANCE_MARGIN=0.05`
+  - `FACE_MATCH_SINGLE_CANDIDATE_MAX_DISTANCE=0.5`

@@ -177,7 +177,7 @@ export function createEventsService(repository = createEventsRepository()) {
         const peopleInPhoto = byPhotoId.get(photo.id) || [];
         if (!effectiveSelected.length) {
           if (event.privacy_type === "public") return true;
-          return peopleInPhoto.includes(user.id);
+          return peopleInPhoto.some((personId) => baseAllowedPeople.includes(personId));
         }
         return peopleInPhoto.some((personId) => effectiveSelected.includes(personId));
       });
